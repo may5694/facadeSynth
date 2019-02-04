@@ -1,5 +1,6 @@
 CPPFLAGS = -std=c++17
-LIBS = -lEGL \
+LIBS = -lstdc++fs \
+	-lEGL \
 	-lGL
 
 all: facadeScore

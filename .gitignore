@@ -2,3 +2,5 @@ data/
 output/
 facadeScore
 *.o
+*.swp
+*.json
