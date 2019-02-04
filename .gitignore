@@ -1,6 +1,6 @@
 data/
 output/
-facadeScore
+facadeSynth
 *.o
 *.swp
 *.json

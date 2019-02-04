@@ -3,9 +3,9 @@ LIBS = -lstdc++fs \
 	-lEGL \
 	-lGL
 
-all: facadeScore
+all: facadeSynth
 
-facadeScore: main.o
+facadeSynth: main.o
 	g++ -o $@ $^ $(LIBS)
 	cp $@ ../
 
@@ -13,4 +13,4 @@ main.o: main.cpp
 	g++ $(CPPFLAGS) -o $@ -c $<
 
 clean:
-	rm -f *.o facadeScore
+	rm -f *.o facadeSynth
