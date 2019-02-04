@@ -16,7 +16,10 @@ fs::path outputDir;
 
 // Commandline options
 struct Options {
-	bool quit;				// Do nothing
+	string region;			// Which region to process
+	vector<int> clusters;	// Which clusters to process (empty -> all in region)
+	string model;			// Which model to use (e.g., cgv_r, cgv_a, etc.)
+	bool quit;				// Do nothing (used for --help)
 	fs::path configPath;	// Path to config file
 
 	Options();				// Set default values
@@ -63,27 +66,53 @@ int main(int argc, char** argv) {
 	return 0;
 }
 
-Options::Options() : quit(false), configPath("config.json") {}
+Options::Options() : model("cgv_r"), quit(false), configPath("config.json") {}
 
 // Parses commandline arguments and returns a set of options
 Options parseCmd(int argc, char** argv) {
 	auto usage = [&](ostream& out) -> void {
-		out << "Usage: " << argv[0] << " [OPTIONS]" << endl;
+		out << "Usage: " << argv[0] << " region [cluster IDs] [OPTIONS]" << endl;
 		out << "Options:" << endl;
-		out << "    --config <path>    Specify config file to use" << endl;
-		out << "    -h, --help         Display this help and exit" << endl;
+		out << "    --config <path>      Specify config file to use" << endl;
+		out << "    -h, --help           Display this help and exit" << endl;
+		out << "    -m, --model <name>   Which model to process" << endl;
+		out << "                           Defaults to cgv_r" << endl;
 	};
 
 	Options opts;
 
 	try {
-		// Look at all arguments
-		for (int i = 1; i < argc; i++) {
-			string arg(argv[i]);
+		// Get region
+		if (argc < 2)
+			throw runtime_error("Too few arguments! Expected region");
+		opts.region = argv[1];
+		// Check for --help
+		if (opts.region == "-h" || opts.region == "--help") {
+			usage(cout);
+			opts.quit = true;
+			return opts;
+		}
+
+		// Get cluster IDs
+		int a;
+		for (a = 2; a < argc; a++) {
+			// Try to get an integer from the arg string
+			try {
+				string arg = argv[a];
+				opts.clusters.push_back(stoi(arg));
+			// If failed, stop trying to get cluster IDs
+			} catch (const exception& e) {
+				break;
+			}
+		}
+
+		// Look at all remaining arguments
+		for (; a < argc; a++) {
+			string arg(argv[a]);
 			// Specify a config file to use
 			if (arg == "--config") {
-				if (i+1 < argc)
-					opts.configPath = fs::path(argv[++i]);
+				if (a+1 < argc)
+					opts.configPath = fs::path(argv[++a]);
 				else
 					throw runtime_error("Expected <path> after " + arg);
 
@@ -93,10 +122,17 @@ Options parseCmd(int argc, char** argv) {
 				opts.quit = true;
 				break;
 
+			// Specify model to process
+			} else if (arg == "-m" || arg == "--model") {
+				if (a+1 < argc)
+					opts.model = argv[++a];
+				else
+					throw runtime_error("Expected <name> after " + arg);
+
 			// Unknown argument
 			} else {
 				stringstream ss;
-				ss << "Unknown argument " << argv[i];
+				ss << "Unknown argument " << arg;
 				throw runtime_error(ss.str());
 			}
 		}
