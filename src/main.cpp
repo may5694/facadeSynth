@@ -14,18 +14,28 @@ fs::path satelliteDir;
 fs::path dataDir;
 fs::path outputDir;
 
+// Commandline options
+struct Options {
+	bool quit;				// Do nothing
+	fs::path configPath;	// Path to config file
+
+	Options();				// Set default values
+};
+
 // Functions
+Options parseCmd(int argc, char** argv);
 void genConfig(fs::path configPath);
 void readConfig(fs::path configPath);
 
 int main(int argc, char** argv) {
 	try {
-		// Parse commandline parameters
+		// Parse commandline arguments
+		Options opts = parseCmd(argc, argv);
+		if (opts.quit) return 0;
 
 		// Check if config file exists
-		fs::path configPath = "config.json";
-		if (!fs::exists(configPath)) {
-			cout << "Configuration file " << configPath << " does not exist!" << endl;
+		if (!fs::exists(opts.configPath)) {
+			cout << "Configuration file " << opts.configPath << " does not exist!" << endl;
 			// Ask to generate a template file
 			while (true) {
 				cout << "Generate template? (y/n): ";
@@ -33,7 +43,7 @@ int main(int argc, char** argv) {
 				cin >> c;
 				if (c == 'y' || c == 'Y') {
 					// Generate a template config file
-					genConfig(configPath);
+					genConfig(opts.configPath);
 					break;
 				} else if (c == 'n' || c == 'N') {
 					break;
@@ -42,7 +52,7 @@ int main(int argc, char** argv) {
 			return 0;
 		}
 		// Read config file
-		readConfig(configPath);
+		readConfig(opts.configPath);
 
 	// Handle any exceptions
 	} catch (const exception& e) {
@@ -51,6 +61,55 @@ int main(int argc, char** argv) {
 	}
 
 	return 0;
+}
+
+Options::Options() : quit(false), configPath("config.json") {}
+
+// Parses commandline arguments and returns a set of options
+Options parseCmd(int argc, char** argv) {
+	auto usage = [&](ostream& out) -> void {
+		out << "Usage: " << argv[0] << " [OPTIONS]" << endl;
+		out << "Options:" << endl;
+		out << "    --config <path>    Specify config file to use" << endl;
+		out << "    -h, --help         Display this help and exit" << endl;
+	};
+
+	Options opts;
+
+	try {
+		// Look at all arguments
+		for (int i = 1; i < argc; i++) {
+			string arg(argv[i]);
+			// Specify a config file to use
+			if (arg == "--config") {
+				if (i+1 < argc)
+					opts.configPath = fs::path(argv[++i]);
+				else
+					throw runtime_error("Expected <path> after " + arg);
+
+			// Ask for help
+			} else if (arg == "-h" || arg == "--help") {
+				usage(cout);
+				opts.quit = true;
+				break;
+
+			// Unknown argument
+			} else {
+				stringstream ss;
+				ss << "Unknown argument " << argv[i];
+				throw runtime_error(ss.str());
+			}
+		}
+
+	// Add usage to error message
+	} catch (const exception& e) {
+		stringstream ss;
+		ss << e.what() << endl;
+		usage(ss);
+		throw runtime_error(ss.str());
+	}
+
+	return opts;
 }
 
 // Generates a template config file at the specified path
