@@ -9,10 +9,10 @@ using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
 
 // Global state
-fs::path regionDir;
-fs::path satelliteDir;
-fs::path dataDir;
-fs::path outputDir;
+fs::path regionDir;			// Directory containing cluster info per region
+fs::path satelliteDir;		// Directory containing satellite images per region
+fs::path dataDir;			// Saved data output directory
+fs::path outputDir;			// Best-scoring facade output directory
 
 // Commandline options
 struct Options {
@@ -21,6 +21,7 @@ struct Options {
 	string model;			// Which model to use (e.g., cgv_r, cgv_a, etc.)
 	bool quit;				// Do nothing (used for --help)
 	fs::path configPath;	// Path to config file
+	bool force;				// Force regeneration of cluster data
 
 	Options();				// Set default values
 };
@@ -57,6 +58,53 @@ int main(int argc, char** argv) {
 		// Read config file
 		readConfig(opts.configPath);
 
+
+		// Check if region exists
+		if (!fs::exists(regionDir / opts.region))
+			throw runtime_error("No region found with name \"" + opts.region + "\"");
+		fs::path clusterDir = regionDir / opts.region / "BuildingClusters";
+		if (!fs::exists(clusterDir) || fs::is_empty(clusterDir))
+			throw runtime_error("No clusters for region \"" + opts.region + "\"");
+
+		// Check if clusters exist
+		if (opts.clusters.empty()) {
+			// Get all clusters if none specified
+			fs::directory_iterator di(clusterDir), dend;
+			for (; di != dend; ++di) {
+				if (!fs::is_directory(di->path())) continue;
+				// Only allow integer directory names as cluster IDs
+				try {
+					opts.clusters.push_back(stoi(di->path().filename().string()));
+				} catch (const exception& e) { continue; }
+			}
+		} else {
+			// Check for all clusters' existence
+			for (int i = 0; i < opts.clusters.size(); i++) {
+				stringstream ss;
+				ss << setw(4) << setfill('0') << opts.clusters[i];
+				if (!fs::exists(clusterDir / ss.str())) {
+					cout << "Cluster " << ss.str() << " not found! Skipping..." << endl;
+					opts.clusters.erase(opts.clusters.begin() + i);
+					i--;
+				}
+			}
+		}
+		if (opts.clusters.empty())
+			throw runtime_error("No clusters to process...");
+
+		// Check if satellite images exist
+		if (!fs::exists(satelliteDir / opts.region) || fs::is_empty(satelliteDir / opts.region))
+			throw runtime_error("No satellite images for region \"" + opts.region + "\"");
+
+		// Make sure data region directory exists
+		if (!fs::exists(dataDir / opts.region))
+			fs::create_directory(dataDir / opts.region);
+		fs::path clusterMaskDir = dataDir / opts.region / "clusterMasks";
+		if (!fs::exists(clusterMaskDir) || fs::is_empty(clusterMaskDir))
+			// TODO: generate cluster masks if needed
+			throw runtime_error("No cluster masks for region \"" + opts.region + "\"");
+
+
 	// Handle any exceptions
 	} catch (const exception& e) {
 		cerr << e.what() << endl;
@@ -66,7 +114,11 @@ int main(int argc, char** argv) {
 	return 0;
 }
 
-Options::Options() : model("cgv_r"), quit(false), configPath("config.json") {}
+Options::Options() :
+	model("cgv_r"),
+	quit(false),
+	configPath("config.json"),
+	force(false) {}
 
 // Parses commandline arguments and returns a set of options
 Options parseCmd(int argc, char** argv) {
@@ -74,6 +126,7 @@ Options parseCmd(int argc, char** argv) {
 		out << "Usage: " << argv[0] << " region [cluster IDs] [OPTIONS]" << endl;
 		out << "Options:" << endl;
 		out << "    --config <path>      Specify config file to use" << endl;
+		out << "    -f, --force          Force regeneration of cluster data" << endl;
 		out << "    -h, --help           Display this help and exit" << endl;
 		out << "    -m, --model <name>   Which model to process" << endl;
 		out << "                           Defaults to cgv_r" << endl;
@@ -115,6 +168,10 @@ Options parseCmd(int argc, char** argv) {
 					opts.configPath = fs::path(argv[++a]);
 				else
 					throw runtime_error("Expected <path> after " + arg);
+
+			// Force regeneration of cluser data
+			} else if (arg == "-f" || arg == "--force") {
+				opts.force = true;
 
 			// Ask for help
 			} else if (arg == "-h" || arg == "--help") {
@@ -213,4 +270,9 @@ void readConfig(fs::path configPath) {
 		ss << "Satellite path " << satelliteDir << " not a directory!";
 		throw runtime_error(ss.str());
 	}
+	// Create output directories if they do not exist
+	if (!fs::exists(dataDir))
+		fs::create_directory(dataDir);
+	if (!fs::exists(outputDir))
+		fs::create_directory(outputDir);
 }
