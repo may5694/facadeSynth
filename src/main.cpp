@@ -5,11 +5,10 @@
 #include <set>
 #include <experimental/filesystem>
 #include "json.hpp"
+#include "satellite.hpp"
 using namespace std;
 using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
-
-class Satellite {};
 
 // Program options
 struct Options {
