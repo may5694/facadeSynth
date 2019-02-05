@@ -1,4 +1,4 @@
-CPPFLAGS = -std=c++17
+CPPFLAGS = -std=c++17 -O3
 LIBS = -lstdc++fs \
 	-lopencv_core \
 	-lopencv_imgcodecs \

@@ -345,5 +345,16 @@ void checkDirectories(Options& opts) {
 }
 
 vector<Satellite> loadSatellites(Options& opts) {
-	return {};
+	fs::path satDir = opts.satelliteDir / opts.region;
+	vector<Satellite> sats;
+	for (fs::directory_iterator di(satDir), dend; di != dend; ++di) {
+		// Skip non-files and those not ending in .tif
+		if (!fs::is_regular_file(di->path()) || di->path().extension() != ".tif")
+			continue;
+		// Create a Satellite object from file and add it to list
+		cout << "Loading satellite " << di->path().stem().string() << "..." << endl;
+		sats.push_back(Satellite(di->path()));
+	}
+
+	return sats;
 }
