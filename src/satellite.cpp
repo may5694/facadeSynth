@@ -3,6 +3,7 @@
 using namespace std;
 namespace fs = std::experimental::filesystem;
 
+// Convert GDAL types to OpenCV types
 int cvType(GDALDataType gdt) {
 	switch (gdt) {
 	case GDT_Byte: return CV_8UC1;
@@ -76,6 +77,7 @@ Satellite::Satellite(string filename) {
 }
 
 Satellite::~Satellite() {
+	// Release memory
 	if (rpcXformer) {
 		GDALDestroyRPCTransformer(rpcXformer);
 		rpcXformer = NULL;
@@ -87,13 +89,14 @@ Satellite::Satellite(Satellite&& other) {
 	satImg = other.satImg;
 	rpcInfo = other.rpcInfo;
 	rpcXformer = other.rpcXformer;
-	bb = other.bb;
+//	bb = other.bb;
 	name = other.name;
 	projUp = other.projUp;
 
 	other.rpcXformer = NULL;
 }
 
+/*
 // Calculate the bounding box based on a set of projected points
 void Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
 	bb = cv::boundingRect(allPts);
@@ -104,7 +107,6 @@ void Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
 	bb &= cv::Rect(0, 0, satImg.cols, satImg.rows);
 }
 
-/*
 cv::Point3d utm2px(cv::Point3d p, BuildingMetadata& bm, Satellite& sat) {
 
 	// Add building origin

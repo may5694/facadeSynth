@@ -9,13 +9,15 @@ LIBS = -lstdc++fs \
 
 all: facadeSynth
 
-facadeSynth: main.o satellite.o
+facadeSynth: main.o satellite.o building.o
 	g++ -o $@ $^ $(LIBS)
 	cp $@ ../
 
 main.o: main.cpp
 	g++ $(CPPFLAGS) -o $@ -c $<
 satellite.o: satellite.cpp
+	g++ $(CPPFLAGS) -o $@ -c $<
+building.o: building.cpp
 	g++ $(CPPFLAGS) -o $@ -c $<
 
 clean:

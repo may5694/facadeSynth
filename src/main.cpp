@@ -6,6 +6,7 @@
 #include <experimental/filesystem>
 #include "json.hpp"
 #include "satellite.hpp"
+#include "building.hpp"
 using namespace std;
 using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
@@ -87,14 +88,14 @@ int main(int argc, char** argv) {
 
 			fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cidStr;
 			fs::path dataClusterIDDir = opts.dataDir / opts.region / cidStr;
-//			Building b;
+			Building b;
 			// Load or generate building
 			if (opts.generate) {
 				cout << "Generating cluster " << cidStr << "..." << endl;
-//				b.generate(inputClusterIDDir, dataClusterIDDir, opts.model, sats);
+				b.generate(inputClusterIDDir, dataClusterIDDir, opts.model, sats);
 			} else {
 				cout << "Loading cluster " << cidStr << "..." << endl;
-//				b.load(dataClusterIDDir, opts.model);
+				b.load(dataClusterIDDir, opts.model);
 			}
 
 			// TODO: score, synthesize
@@ -227,10 +228,10 @@ void readConfig(Options& opts) {
 		configFile >> config;
 
 		// Store parameters
-		opts.regionDir = fs::path(config.at("regionDir"));
-		opts.satelliteDir = fs::path(config.at("satelliteDir"));
-		opts.dataDir = fs::path(config.at("dataDir"));
-		opts.outputDir = fs::path(config.at("outputDir"));
+		opts.regionDir = config.at("regionDir").get<string>();
+		opts.satelliteDir = config.at("satelliteDir").get<string>();
+		opts.dataDir = config.at("dataDir").get<string>();
+		opts.outputDir = config.at("outputDir").get<string>();
 
 	// Add message to errors while reading
 	} catch (const exception& e) {

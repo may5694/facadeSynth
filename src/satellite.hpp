@@ -7,14 +7,14 @@
 #include <gdal/gdal_alg.h>
 #include <glm/glm.hpp>
 
+// Holds a satellite dataset with associated RPC info
 class Satellite {
 public:
-	cv::Mat satImg;
-	GDALRPCInfo rpcInfo;
-	void* rpcXformer;
-	cv::Rect bb;
-	std::string name;
-	glm::vec2 projUp;
+	cv::Mat satImg;			// The satellite image as an OpenCV Mat
+	GDALRPCInfo rpcInfo;	// RPC info
+	void* rpcXformer;		// RPC transformer object
+	std::string name;		// Name of satellite dataset
+	glm::vec2 projUp;		// Projected "up" vector
 
 public:
 	Satellite(std::string filename);
@@ -26,7 +26,7 @@ public:
 	Satellite& operator=(const Satellite& other) = delete;
 	Satellite& operator=(Satellite&& other) = delete;
 
-	void calcBB(std::vector<cv::Point2f> allPts, int border = 50);
+//	void calcBB(std::vector<cv::Point2f> allPts, int border = 50);
 };
 
 //cv::Point3d utm2px(cv::Point3d p, BuildingMetadata& bm, Satellite& sat);
