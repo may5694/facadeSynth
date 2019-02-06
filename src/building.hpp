@@ -18,6 +18,8 @@ public:
 		std::string model, std::vector<Satellite>& sats);
 	// Load existing building data
 	void load(fs::path dataClusterDir, std::string model);
+	// Return building to empty state
+	void clear();
 
 	// Geometry accessors
 	const auto& getPosBuf() const { return posBuf; }
@@ -46,6 +48,10 @@ private:
 	glm::uvec2 atlasSize;						// Width, height of atlas texture (px)
 	std::map<std::string, SatInfo> satInfo;		// Per-satellite info
 	std::map<uint32_t, FacadeInfo> facadeInfo;	// Per-facade info
+
+	// Methods
+	void loadGeometry(fs::path objPath);
+	void loadMetadata(fs::path metaPath);
 };
 
 // Holds information about a satellite dataset
