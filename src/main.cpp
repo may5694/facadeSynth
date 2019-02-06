@@ -7,6 +7,7 @@
 #include "json.hpp"
 #include "satellite.hpp"
 #include "building.hpp"
+#include "dn_predict.hpp"
 using namespace std;
 using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
 				b.load(dataClusterIDDir, opts.model);
 			}
 
-			// TODO: score, synthesize
+			// TODO: score, predict, synthesize
 		}
 
 	// Handle any exceptions
