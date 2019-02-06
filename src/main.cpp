@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 			}
 
 			fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cidStr;
-			fs::path dataClusterIDDir = opts.dataDir / opts.region / cidStr;
+			fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cidStr;
 			Building b;
 			// Load or generate building
 			if (opts.generate) {
@@ -270,7 +270,7 @@ void checkDirectories(Options& opts) {
 			throw runtime_error("No satellite images for region \"" + opts.region + "\"");
 
 		// Check if cluster masks exist
-		fs::path clusterMaskDir = opts.dataDir / opts.region / "clusterMasks" / opts.model;
+		fs::path clusterMaskDir = opts.dataDir / "regions" / opts.region / "clusterMasks" / opts.model;
 		if (!fs::exists(clusterMaskDir) || fs::is_empty(clusterMaskDir))
 			// TODO: generate cluster masks if needed
 			throw runtime_error("No cluster masks for region \"" + opts.region + "\", model \"" + opts.model + "\"");
@@ -279,8 +279,9 @@ void checkDirectories(Options& opts) {
 		if (!fs::exists(opts.dataDir))
 			fs::create_directory(opts.dataDir);
 		// Create region directory if it doesn't exist
-		if (!fs::exists(opts.dataDir / opts.region))
-			fs::create_directory(opts.dataDir / opts.region);
+		fs::path dataRegionDir = opts.dataDir / "regions" / opts.region;
+		if (!fs::exists(dataRegionDir))
+			fs::create_directories(dataRegionDir);
 
 	// If not generating, make sure data directories already exist
 	} else {
@@ -289,7 +290,7 @@ void checkDirectories(Options& opts) {
 			ss << "Data directory " << opts.dataDir << " does not exist!";
 			throw runtime_error(ss.str());
 		}
-		if (!fs::exists(opts.dataDir / opts.region)) {
+		if (!fs::exists(opts.dataDir / "regions" / opts.region)) {
 			stringstream ss;
 			ss << "No data for region \"" << opts.region << "\"";
 			throw runtime_error(ss.str());
@@ -303,7 +304,7 @@ void checkDirectories(Options& opts) {
 		fs::create_directory(opts.outputDir / opts.region);
 
 	fs::path inputClusterDir = opts.regionDir / opts.region / "BuildingClusters";
-	fs::path dataClusterDir = opts.dataDir / opts.region;
+	fs::path dataClusterDir = opts.dataDir / "regions" / opts.region;
 	// Use all clusters in region if none specified
 	if (opts.clusters.empty()) {
 		fs::path clusterDir = opts.generate ? inputClusterDir : dataClusterDir;
