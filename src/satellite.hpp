@@ -29,7 +29,4 @@ public:
 //	void calcBB(std::vector<cv::Point2f> allPts, int border = 50);
 };
 
-//cv::Point3d utm2px(cv::Point3d p, BuildingMetadata& bm, Satellite& sat);
-//cv::Point3d px2utm(cv::Point3d p, BuildingMetadata& bm, Satellite& sat);
-
 #endif

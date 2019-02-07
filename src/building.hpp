@@ -54,7 +54,9 @@ private:
 	std::map<std::string, SatInfo> satInfo;		// Per-satellite info
 	std::map<uint32_t, FacadeInfo> facadeInfo;	// Per-facade info
 
-	// Methods
+	// Generation methods
+	void genReadMetadata(fs::path inputClusterDir);
+	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
 };

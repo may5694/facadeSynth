@@ -89,7 +89,6 @@ Satellite::Satellite(Satellite&& other) {
 	satImg = other.satImg;
 	rpcInfo = other.rpcInfo;
 	rpcXformer = other.rpcXformer;
-//	bb = other.bb;
 	name = other.name;
 	projUp = other.projUp;
 
@@ -105,47 +104,5 @@ void Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
 	bb += cv::Size(2 * border, 2 * border);
 	// Make sure it's still within the image bounds
 	bb &= cv::Rect(0, 0, satImg.cols, satImg.rows);
-}
-
-cv::Point3d utm2px(cv::Point3d p, BuildingMetadata& bm, Satellite& sat) {
-
-	// Add building origin
-	p = p + bm.origin;
-
-	// UTM to lat/long
-	bm.utm2ll->Transform(1, &p.x, &p.y);
-
-	// Lat/long to pixels
-	int succ;
-	GDALRPCTransform(sat.rpcXformer, FALSE, 1, &p.x, &p.y, &p.z, &succ);
-
-	// Relative to bounding box
-	if (!sat.bb.empty()) {
-		p.x -= sat.bb.tl().x;
-		p.y -= sat.bb.tl().y;
-	}
-
-	return p;
-}
-
-cv::Point3d px2utm(cv::Point3d p, BuildingMetadata& bm, Satellite& sat) {
-
-	// Relative to bounding box
-	if (!sat.bb.empty()) {
-		p.x += sat.bb.tl().x;
-		p.y += sat.bb.tl().y;
-	}
-
-	// Pixels to lat/long
-	int succ;
-	GDALRPCTransform(sat.rpcXformer, TRUE, 1, &p.x, &p.y, &p.z, &succ);
-
-	// Lat/long to UTM
-	bm.ll2utm->Transform(1, &p.x, &p.y);
-
-	// Subtract building origin
-	p = p - bm.origin;
-
-	return p;
 }
 */

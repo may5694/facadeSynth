@@ -1,5 +1,6 @@
 #include "building.hpp"
 #include "json.hpp"
+#include "util.hpp"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 using namespace std;
@@ -9,6 +10,49 @@ namespace fs = std::experimental::filesystem;
 // Generate building data from input directory, and save it to data directory
 void Building::generate(fs::path inputDir, fs::path dataDir, vector<Satellite>& sats,
 	string region, string cluster, string model) {
+	// Clear any existing contents
+	clear();
+
+	// Check for satellite images
+	if (sats.empty())
+		throw runtime_error("No satellite images!");
+
+	// Check for input directory existence
+	fs::path inputClusterDir = inputDir / region / "BuildingClusters" / cluster;
+	if (!fs::exists(inputClusterDir)) {
+		stringstream ss;
+		ss << "Couldn't find cluster \"" << cluster << "\", region \""
+			<< region << "\" in " << inputClusterDir;
+		throw runtime_error(ss.str());
+	}
+	fs::path inputModelDir = inputClusterDir / "ModelsOutput" / model;
+	if (!fs::exists(inputModelDir)) {
+		stringstream ss;
+		ss << "Couldn't find model \"" << model << "\" in " << inputModelDir;
+		throw runtime_error(ss.str());
+	}
+
+	// Check for data directory existence
+	if (!fs::exists(dataDir)) {
+		stringstream ss;
+		ss << "Data directory " << dataDir << " does not exist!" << endl;
+		throw runtime_error(ss.str());
+	}
+
+	// Create data directories as needed
+	modelDir = dataDir / "regions" / region / cluster / model;
+	if (!fs::exists(modelDir))
+		fs::create_directories(modelDir);
+
+	this->region = region;
+	this->cluster = cluster;
+	this->model = model;
+
+	// Read metadata
+	genReadMetadata(inputClusterDir);
+
+	// Create spatial transformation data
+	util::SpatXform sx(epsgCode, origin);
 }
 
 // Load building data from data directory
@@ -18,9 +62,12 @@ void Building::load(fs::path dataDir, string region, string cluster, string mode
 
 	// Check path to building data
 	modelDir = dataDir / "regions" / region / cluster / model;
-	if (!fs::exists(modelDir))
-		throw runtime_error("No data for model \"" + model + "\", cluster \"" + cluster
-			+ "\", region \"" + region + "\"");
+	if (!fs::exists(modelDir)) {
+		stringstream ss;
+		ss << "No data for model \"" << model << "\", cluster \"" << cluster
+			<< "\", region \"" << region << "\" in " << modelDir;
+		throw runtime_error(ss.str());
+	}
 
 	// Construct path to .obj file
 	fs::path objPath = modelDir / (region + "_" + cluster + "_" + model + ".obj");
@@ -64,6 +111,24 @@ void Building::clear() {
 	atlasSize = glm::uvec2(0);
 	satInfo.clear();
 	facadeInfo.clear();
+}
+
+void Building::genReadMetadata(fs::path inputClusterDir) {
+	// Read input metadata file
+	fs::path inputMetaPath = inputClusterDir /
+		("building_cluster_" + cluster + "__Metadata.json");
+	ifstream inputMetaFile(inputMetaPath);
+	json metadata;
+	inputMetaFile >> metadata;
+
+	// Get EPSG code
+	string epsgStr = metadata.at("_items").at("spatial_reference").at("crs").at("data").at("init");
+	epsgCode = stoi(epsgStr.substr(5));
+
+	// Get origin
+	origin.x = metadata.at("_items").at("spatial_reference").at("affine").at(0);
+	origin.y = metadata.at("_items").at("spatial_reference").at("affine").at(3);
+	origin.z = metadata.at("_items").at("z_origin");
 }
 
 // Read the .obj file and populate the geometry buffers
