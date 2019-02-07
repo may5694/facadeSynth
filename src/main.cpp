@@ -93,10 +93,10 @@ int main(int argc, char** argv) {
 			// Load or generate building
 			if (opts.generate) {
 				cout << "Generating cluster " << cidStr << "..." << endl;
-				b.generate(inputClusterIDDir, dataClusterIDDir, opts.model, sats);
+				b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cidStr, opts.model);
 			} else {
 				cout << "Loading cluster " << cidStr << "..." << endl;
-				b.load(dataClusterIDDir, opts.model);
+				b.load(opts.dataDir, opts.region, cidStr, opts.model);
 			}
 
 			// TODO: score, predict, synthesize

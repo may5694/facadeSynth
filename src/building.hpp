@@ -14,10 +14,10 @@ struct FacadeInfo;
 class Building {
 public:
 	// Generate building data
-	void generate(fs::path inputClusterDir, fs::path dataClusterDir,
-		std::string model, std::vector<Satellite>& sats);
+	void generate(fs::path regionDir, fs::path dataDir, std::vector<Satellite>& sats,
+		std::string region, std::string cluster, std::string model);
 	// Load existing building data
-	void load(fs::path dataClusterDir, std::string model);
+	void load(fs::path dataDir, std::string region, std::string cluster, std::string model);
 	// Return building to empty state
 	void clear();
 
@@ -35,6 +35,8 @@ public:
 	const auto& getFacadeInfo() const { return facadeInfo; }
 
 private:
+	fs::path modelDir;		// Directory containing all building data; not saved
+
 	// Geometry buffers
 	std::vector<glm::vec3> posBuf;								// Positions
 	std::vector<glm::vec3> normBuf;								// Normals
@@ -43,9 +45,12 @@ private:
 	std::vector<glm::uint> indexBuf;							// Index buffer
 
 	// Metadata
-	uint32_t epsgCode;							// Defines UTM coordinate space
-	glm::vec3 origin;							// Geometry origin (UTM)
-	glm::uvec2 atlasSize;						// Width, height of atlas texture (px)
+	std::string region;					// Name of region
+	std::string cluster;				// Cluster ID
+	std::string model;					// Model name
+	uint32_t epsgCode;					// Defines UTM coordinate space
+	glm::vec3 origin;					// Geometry origin (UTM)
+	glm::uvec2 atlasSize;				// Width, height of atlas texture (px)
 	std::map<std::string, SatInfo> satInfo;		// Per-satellite info
 	std::map<uint32_t, FacadeInfo> facadeInfo;	// Per-facade info
 

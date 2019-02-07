@@ -7,30 +7,51 @@ using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
 
 // Generate building data from input directory, and save it to data directory
-void Building::generate(fs::path inputClusterDir, fs::path dataClusterDir,
-	string model, vector<Satellite>& sats) {
+void Building::generate(fs::path inputDir, fs::path dataDir, vector<Satellite>& sats,
+	string region, string cluster, string model) {
 }
 
 // Load building data from data directory
-void Building::load(fs::path dataClusterDir, string model) {
+void Building::load(fs::path dataDir, string region, string cluster, string model) {
 	// Clear any existing contents
 	clear();
 
-	// Get region and cluster names
-	string regionStr = dataClusterDir.parent_path().filename().string();
-	string clusterStr = dataClusterDir.filename().string();
+	// Check path to building data
+	modelDir = dataDir / "regions" / region / cluster / model;
+	if (!fs::exists(modelDir))
+		throw runtime_error("No data for model \"" + model + "\", cluster \"" + cluster
+			+ "\", region \"" + region + "\"");
+
 	// Construct path to .obj file
-	fs::path objPath = dataClusterDir / (regionStr + "_" + clusterStr + "_" + model + ".obj");
+	fs::path objPath = modelDir / (region + "_" + cluster + "_" + model + ".obj");
 	// Construct path to .json file
 	fs::path metaPath = objPath; metaPath.replace_extension(".json");
 
 	// Load the geometry from the .obj file
 	loadGeometry(objPath);
 	loadMetadata(metaPath);
+
+	// Check a few things
+	if (this->region != region)
+		throw runtime_error("Region mismatch - tried to load "
+			+ region + " but got " + this->region);
+	if (this->cluster != cluster)
+		throw runtime_error("Cluster mismatch - tried to load "
+			+ cluster + " but got " + this->cluster);
+	if (this->model != model)
+		throw runtime_error("Model mismatch - tried to load "
+			+ model + " but got " + this->model);
+	for (auto& s : satTCBufs)
+		if (!satInfo.count(s.first))
+			throw runtime_error("Satellite group " + s.first + " not found in satInfo!");
+	for (auto& s : satInfo)
+		if (!satTCBufs.count(s.first))
+			throw runtime_error("Satellite info " + s.first + " not found in texcoords!");
 }
 
 // Release all memory and return to empty state
 void Building::clear() {
+	modelDir = fs::path();
 	// Clear geometry buffers
 	posBuf.clear();
 	normBuf.clear();
@@ -166,6 +187,10 @@ void Building::loadMetadata(fs::path metaPath) {
 	ifstream metaFile(metaPath);
 	metaFile >> meta;
 
+	// Region, cluster, model
+	region = meta.at("region");
+	cluster = meta.at("cluster");
+	model = meta.at("model");
 	// EPSG code
 	epsgCode = meta.at("epsgCode");
 	// Origin in UTM
