@@ -41,7 +41,7 @@ Options parseCmd(int argc, char** argv);
 void genConfig(fs::path configPath);
 void readConfig(Options& opts);
 void checkDirectories(Options& opts);
-vector<Satellite> loadSatellites(Options& opts);
+map<string, Satellite> loadSatellites(Options& opts);
 
 // Program entry point
 int main(int argc, char** argv) {
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 		checkDirectories(opts);
 
 		// Load satellite images if generating cluster data
-		vector<Satellite> sats;
+		map<string, Satellite> sats;
 		if (opts.generate)
 			sats = loadSatellites(opts);
 
@@ -87,19 +87,25 @@ int main(int argc, char** argv) {
 				cidStr = ss.str();
 			}
 
-			fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cidStr;
-			fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cidStr;
-			Building b;
-			// Load or generate building
-			if (opts.generate) {
-				cout << "Generating cluster " << cidStr << "..." << endl;
-				b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cidStr, opts.model);
-			} else {
-				cout << "Loading cluster " << cidStr << "..." << endl;
-				b.load(opts.dataDir, opts.region, cidStr, opts.model);
-			}
+			try {
+				fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cidStr;
+				fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cidStr;
+				Building b;
+				// Load or generate building
+				if (opts.generate) {
+					cout << "Generating cluster " << cidStr << "..." << endl;
+					b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cidStr, opts.model);
+				} else {
+					cout << "Loading cluster " << cidStr << "..." << endl;
+					b.load(opts.dataDir, opts.region, cidStr, opts.model);
+				}
 
-			// TODO: score, predict, synthesize
+				// TODO: score, predict, synthesize
+
+			} catch (const exception& e) {
+				cout << "Failed to process cluster " << cidStr << ": " << e.what() << endl;
+				continue;
+			}
 		}
 
 	// Handle any exceptions
@@ -347,16 +353,19 @@ void checkDirectories(Options& opts) {
 	}
 }
 
-vector<Satellite> loadSatellites(Options& opts) {
+// Reads all satellite datasets and returns a map of satellite name to Satellite object
+map<string, Satellite> loadSatellites(Options& opts) {
 	fs::path satDir = opts.satelliteDir / opts.region;
-	vector<Satellite> sats;
+	map<string, Satellite> sats;
 	for (fs::directory_iterator di(satDir), dend; di != dend; ++di) {
 		// Skip non-files and those not ending in .tif
 		if (!fs::is_regular_file(di->path()) || di->path().extension() != ".tif")
 			continue;
-		// Create a Satellite object from file and add it to list
+
+		// Create a Satellite object from file and add it to the map
 		cout << "Loading satellite " << di->path().stem().string() << "..." << endl;
-		sats.push_back(Satellite(di->path()));
+		Satellite sat(di->path());
+		sats[sat.name] = std::move(sat);
 	}
 
 	return sats;

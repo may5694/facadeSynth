@@ -5,6 +5,7 @@
 #include <map>
 #include <experimental/filesystem>
 #include <glm/glm.hpp>
+#include <opencv2/opencv.hpp>
 #include "satellite.hpp"
 namespace fs = std::experimental::filesystem;
 
@@ -14,7 +15,7 @@ struct FacadeInfo;
 class Building {
 public:
 	// Generate building data
-	void generate(fs::path regionDir, fs::path dataDir, std::vector<Satellite>& sats,
+	void generate(fs::path regionDir, fs::path dataDir, std::map<std::string, Satellite>& sats,
 		std::string region, std::string cluster, std::string model);
 	// Load existing building data
 	void load(fs::path dataDir, std::string region, std::string cluster, std::string model);
@@ -50,12 +51,15 @@ private:
 	std::string model;					// Model name
 	uint32_t epsgCode;					// Defines UTM coordinate space
 	glm::vec3 origin;					// Geometry origin (UTM)
+	glm::vec3 minBB;					// Minimal coordinate in bounding box (UTM)
+	glm::vec3 maxBB;					// Maximal coordinate in bounding box (UTM)
 	glm::uvec2 atlasSize;				// Width, height of atlas texture (px)
 	std::map<std::string, SatInfo> satInfo;		// Per-satellite info
 	std::map<uint32_t, FacadeInfo> facadeInfo;	// Per-facade info
 
 	// Generation methods
 	void genReadMetadata(fs::path inputClusterDir);
+	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
@@ -64,7 +68,7 @@ private:
 // Holds information about a satellite dataset
 struct SatInfo {
 	std::string name;		// 13-digit satellite prefix (e.g., "16FEB29012345")
-	glm::uvec4 roi;			// Cropped rect surrouding building (px, UL origin)
+	cv::Rect roi;			// Cropped rect surrouding building (px, UL origin)
 	glm::vec3 dir;			// Estimated facing direction (UTM)
 	glm::vec3 sun;			// Direction towards the sun (UTM)
 };
@@ -75,7 +79,7 @@ struct FacadeInfo {
 	std::vector<glm::uint> faces;	// List of face IDs within this facade
 	glm::vec3 normal;				// Normalized facing direction (UTM)
 	glm::uvec2 size;				// Width, height of rectified facade (px)
-	glm::vec4 atlasBB;				// Bounding rect (x, y, w, h) in atlas (UV, LL origin)
+	cv::Rect2f atlasBB;				// Bounding rect in atlas (UV, LL origin)
 	bool roof;						// Whether facade is a roof
 };
 

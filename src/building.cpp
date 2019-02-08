@@ -8,7 +8,7 @@ using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
 
 // Generate building data from input directory, and save it to data directory
-void Building::generate(fs::path inputDir, fs::path dataDir, vector<Satellite>& sats,
+void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satellite>& sats,
 	string region, string cluster, string model) {
 	// Clear any existing contents
 	clear();
@@ -51,8 +51,8 @@ void Building::generate(fs::path inputDir, fs::path dataDir, vector<Satellite>& 
 	// Read metadata
 	genReadMetadata(inputClusterDir);
 
-	// Create spatial transformation data
-	util::SpatXform sx(epsgCode, origin);
+	// Generate geometry from input obj
+	genGeometry(inputModelDir, sats);
 }
 
 // Load building data from data directory
@@ -106,8 +106,13 @@ void Building::clear() {
 	satTCBufs.clear();
 	indexBuf.clear();
 	// Clear metadata
+	region = string();
+	cluster = string();
+	model = string();
 	epsgCode = 0;
 	origin = glm::vec3(0.0);
+	minBB = glm::vec3(FLT_MAX);
+	maxBB = glm::vec3(-FLT_MAX);
 	atlasSize = glm::uvec2(0);
 	satInfo.clear();
 	facadeInfo.clear();
@@ -129,6 +134,151 @@ void Building::genReadMetadata(fs::path inputClusterDir) {
 	origin.x = metadata.at("_items").at("spatial_reference").at("affine").at(0);
 	origin.y = metadata.at("_items").at("spatial_reference").at("affine").at(3);
 	origin.z = metadata.at("_items").at("z_origin");
+}
+
+void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats) {
+	// Create spatial transformation object
+	util::SpatXform sx(epsgCode, origin);
+
+	// Load the obj model
+	fs::path objPath = inputModelDir /
+		("building_cluster_" + cluster + "__" + model + "__output_mesh.obj");
+	tinyobj::attrib_t attrib;
+	vector<tinyobj::shape_t> shapes;
+	string objWarn, objErr;
+	bool objLoaded = tinyobj::LoadObj(&attrib, &shapes, NULL, &objWarn, &objErr,
+		objPath.string().c_str(), NULL, false);
+	// Check for errors
+	if (!objLoaded) {
+		stringstream ss;
+		ss << "Failed to load " << objPath.filename().string() << ":" << endl;
+		ss << objErr;
+		throw runtime_error(ss.str());
+	}
+	// Print any warnings
+	if (!objWarn.empty())
+		cout << objWarn << endl;
+
+	// Get satellite bounding rects
+	for (auto& si : sats) {
+		Satellite& sat = si.second;
+
+		// Project all vertices
+		vector<cv::Point2f> allPts;
+		for (size_t v = 0; v < attrib.vertices.size(); v += 3) {
+			glm::vec3 pt;
+			pt.x = attrib.vertices[v + 0];
+			pt.y = attrib.vertices[v + 1];
+			pt.z = attrib.vertices[v + 2];
+
+			pt = sx.utm2px(pt, sat);
+			allPts.push_back({ pt.x, pt.y });
+		}
+
+		// Calculate bounding rect
+		cv::Rect bb = sat.calcBB(allPts);
+		// Don't use sat if all points are outside ROI
+		if (bb.width <= 0 || bb.height <= 0) continue;
+
+		// Save satellite info
+		satInfo[sat.name].name = sat.name;
+		satInfo[sat.name].roi = bb;
+	}
+
+	// Add faces to geometry buffers
+	for (size_t s = 0; s < shapes.size(); s++) {
+		size_t idx_offset = 0;
+		for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
+			int fv = shapes[s].mesh.num_face_vertices[f];
+			map<string, vector<glm::vec2>> satPts;
+
+			// Assume this triangle faces away from all satellite images
+			bool allBackfacing = true;
+
+			// Iterate through all saved sats
+			for (auto& si : satInfo) {
+				string satName = si.first;
+				vector<glm::vec2> projPts;
+
+				// Iterate over all verts on this face
+				for (size_t v = 0; v < fv; v++) {
+					tinyobj::index_t idx = shapes[s].mesh.indices[idx_offset + v];
+
+					// Get the vert coordinates
+					glm::vec3 pt;
+					pt.x = attrib.vertices[3 * idx.vertex_index + 0];
+					pt.y = attrib.vertices[3 * idx.vertex_index + 1];
+					pt.z = attrib.vertices[3 * idx.vertex_index + 2];
+
+					// Project onto the satellite image
+					pt = sx.utm2uv(pt, sats[satName], si.second.roi);
+					projPts.push_back(glm::vec2(pt));
+				}
+
+				// Get facing direction
+				glm::vec2 e1 = projPts[1] - projPts[0];
+				glm::vec2 e2 = projPts[2] - projPts[0];
+				// Skip this sat if tri faces backwards
+				if (e1.x * e2.y - e1.y * e2.x < 0.0) continue;
+
+				allBackfacing = false;
+
+				// Collect projected points for this sat
+				for (auto p : projPts)
+					satPts[satName].push_back(p);
+			}
+
+			// Skip triangle if no sat saw it
+			if (allBackfacing) {
+				idx_offset += fv;
+				continue;
+			}
+
+			// Add face to index buffer in fan configuration
+			for (size_t v = 2; v < fv; v++) {
+				indexBuf.push_back(posBuf.size());
+				indexBuf.push_back(posBuf.size() + v - 1);
+				indexBuf.push_back(posBuf.size() + v - 0);
+			}
+			// Add vertex attributes
+			for (size_t v = 0; v < fv; v++) {
+				tinyobj::index_t idx = shapes[s].mesh.indices[idx_offset + v];
+
+				// Add position and normal
+				posBuf.push_back({
+					attrib.vertices[3 * idx.vertex_index + 0],
+					attrib.vertices[3 * idx.vertex_index + 1],
+					attrib.vertices[3 * idx.vertex_index + 2]});
+				normBuf.push_back({
+					attrib.normals[3 * idx.normal_index + 0],
+					attrib.normals[3 * idx.normal_index + 1],
+					attrib.normals[3 * idx.normal_index + 2]});
+
+				// Add all texture coordinates
+				for (auto& si : satInfo) {
+					string satName = si.first;
+					// If face not seen by this sat, pass -1s
+					if (!satPts.count(satName))
+						satTCBufs[satName].push_back({ -1.0, -1.0 });
+					// Otherwise give it the projected coordinates
+					else
+						satTCBufs[satName].push_back(satPts[satName][v]);
+				}
+
+				// Update bounding box
+				minBB = glm::min(minBB, posBuf.back());
+				maxBB = glm::max(maxBB, posBuf.back());
+			}
+
+			idx_offset += fv;
+		}
+	}
+
+	// Check if result has no geometry
+	if (indexBuf.empty()) {
+		clear();
+		throw runtime_error("No faces!");
+	}
 }
 
 // Read the .obj file and populate the geometry buffers
@@ -262,6 +412,14 @@ void Building::loadMetadata(fs::path metaPath) {
 	origin.x = meta.at("origin").at(0);
 	origin.y = meta.at("origin").at(1);
 	origin.z = meta.at("origin").at(2);
+	// Minimum bounding box
+	minBB.x = meta.at("minBB").at(0);
+	minBB.y = meta.at("minBB").at(1);
+	minBB.z = meta.at("minBB").at(2);
+	// Maximum bounding box
+	maxBB.x = meta.at("maxBB").at(0);
+	maxBB.y = meta.at("maxBB").at(1);
+	maxBB.z = meta.at("maxBB").at(2);
 	// Size of atlas texture
 	atlasSize.x = meta.at("atlasSize").at(0);
 	atlasSize.y = meta.at("atlasSize").at(1);
@@ -275,8 +433,8 @@ void Building::loadMetadata(fs::path metaPath) {
 		// Region of interest (px, UL origin)
 		si.roi.x = meta.at("satInfo").at(s).at("roi").at(0);
 		si.roi.y = meta.at("satInfo").at(s).at("roi").at(1);
-		si.roi.z = meta.at("satInfo").at(s).at("roi").at(2);
-		si.roi.w = meta.at("satInfo").at(s).at("roi").at(3);
+		si.roi.width = meta.at("satInfo").at(s).at("roi").at(2);
+		si.roi.height = meta.at("satInfo").at(s).at("roi").at(3);
 		// Satellite facing direction (UTM)
 		si.dir.x = meta.at("satInfo").at(s).at("dir").at(0);
 		si.dir.y = meta.at("satInfo").at(s).at("dir").at(1);
@@ -310,8 +468,8 @@ void Building::loadMetadata(fs::path metaPath) {
 		// Bounding rect of UV coords in atlas (UV, LL origin)
 		fi.atlasBB.x = meta.at("facadeInfo").at(f).at("atlasBB").at(0);
 		fi.atlasBB.y = meta.at("facadeInfo").at(f).at("atlasBB").at(1);
-		fi.atlasBB.z = meta.at("facadeInfo").at(f).at("atlasBB").at(2);
-		fi.atlasBB.w = meta.at("facadeInfo").at(f).at("atlasBB").at(3);
+		fi.atlasBB.width = meta.at("facadeInfo").at(f).at("atlasBB").at(2);
+		fi.atlasBB.height = meta.at("facadeInfo").at(f).at("atlasBB").at(3);
 		// Whether this is a roof facade
 		fi.roof = meta.at("facadeInfo").at(f).at("roof");
 

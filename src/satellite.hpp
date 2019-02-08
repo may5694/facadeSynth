@@ -17,16 +17,16 @@ public:
 	glm::vec2 projUp;		// Projected "up" vector
 
 public:
-	Satellite(std::string filename);
+	Satellite(std::string filename = "");
 	~Satellite();
-	// Disable copy
+	// Disable copy construction and assignment
 	Satellite(const Satellite& other) = delete;
-	Satellite(Satellite&& other);
-	// Disable any kind of assignment
 	Satellite& operator=(const Satellite& other) = delete;
-	Satellite& operator=(Satellite&& other) = delete;
+	// Move construct and move assign
+	Satellite(Satellite&& other);
+	Satellite& operator=(Satellite&& other);
 
-//	void calcBB(std::vector<cv::Point2f> allPts, int border = 50);
+	cv::Rect calcBB(std::vector<cv::Point2f> allPts, int border = 50);
 };
 
 #endif

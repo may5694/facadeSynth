@@ -23,10 +23,12 @@ public:
 };
 static GDALInit gdalInit;
 
-Satellite::Satellite(string filename) {
+Satellite::Satellite(string filename) : rpcXformer(NULL) {
+	if (filename.empty()) return;
+
 	// Get the satellite name from the filename
 	fs::path p(filename);
-	name = p.stem().string();
+	name = p.stem().string().substr(0, 13);
 
 	// Open the dataset
 	GDALDataset* satFile = (GDALDataset*)GDALOpen(filename.c_str(), GA_ReadOnly);
@@ -76,6 +78,7 @@ Satellite::Satellite(string filename) {
 	projUp = glm::normalize(glm::vec2(pt) - glm::vec2(satImg.cols / 2, satImg.rows / 2));
 }
 
+// Destructor
 Satellite::~Satellite() {
 	// Release memory
 	if (rpcXformer) {
@@ -86,7 +89,7 @@ Satellite::~Satellite() {
 
 // Move constructor
 Satellite::Satellite(Satellite&& other) {
-	satImg = other.satImg;
+	satImg = other.satImg;			// Does not copy image
 	rpcInfo = other.rpcInfo;
 	rpcXformer = other.rpcXformer;
 	name = other.name;
@@ -95,14 +98,26 @@ Satellite::Satellite(Satellite&& other) {
 	other.rpcXformer = NULL;
 }
 
-/*
+// Move assignment
+Satellite& Satellite::operator=(Satellite&& other) {
+	if (this == &other) return *this;
+
+	// Move class members
+	satImg = other.satImg;			// Does not copy image
+	rpcInfo = other.rpcInfo;
+	std::swap(rpcXformer, other.rpcXformer);
+	name = other.name;
+	projUp = other.projUp;
+}
+
 // Calculate the bounding box based on a set of projected points
-void Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
-	bb = cv::boundingRect(allPts);
+cv::Rect Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
+	cv::Rect bb = cv::boundingRect(allPts);
 	// Expand bounding rect on all sides
 	bb -= cv::Point(border, border);
 	bb += cv::Size(2 * border, 2 * border);
 	// Make sure it's still within the image bounds
 	bb &= cv::Rect(0, 0, satImg.cols, satImg.rows);
+
+	return bb;
 }
-*/
