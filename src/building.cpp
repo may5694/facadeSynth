@@ -39,11 +39,6 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 		throw runtime_error(ss.str());
 	}
 
-	// Create data directories as needed
-	modelDir = dataDir / "regions" / region / cluster / model;
-	if (!fs::exists(modelDir))
-		fs::create_directories(modelDir);
-
 	this->region = region;
 	this->cluster = cluster;
 	this->model = model;
@@ -56,6 +51,9 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 
 	// Group faces into facades and generate atlas coordinates
 	genFacades();
+
+	// Write generated data to disk
+	genWriteData(dataDir);
 }
 
 // Load building data from data directory
@@ -317,8 +315,10 @@ void Building::genFacades() {
 
 	// Rectify each group
 	for (auto& g : groupMap) {
+
 		// Get rotation
 		glm::vec3 norm = glm::normalize(glm::vec3(g.first));
+		g.second.xform = glm::mat4(1.0);
 		// Don't rotate if the normal is already +Z
 		if (glm::dot(norm, { 0.0, 0.0, 1.0 }) < 1.0) {
 			// Get orthonormal vectors
@@ -363,7 +363,7 @@ void Building::genFacades() {
 		}
 
 		// Scale by the ratio of longest lengths
-		glm::mat4 scale;
+		glm::mat4 scale = glm::mat4(1.0);
 		scale[0][0] = projEdgeLen / rectEdgeLen;
 		scale[1][1] = projEdgeLen / rectEdgeLen;
 		g.second.xform = scale * g.second.xform;
@@ -383,7 +383,7 @@ void Building::genFacades() {
 		g.second.maxBB = glm::ivec2(glm::ceil(maxBBf)) + padding;
 
 		// Translate to origin
-		glm::mat4 xlate;
+		glm::mat4 xlate = glm::mat4(1.0);
 		xlate[3] = glm::vec4(-g.second.minBB, 0.0f, 1.0f);
 		g.second.xform = xlate * g.second.xform;
 		// Update bounding box
@@ -463,7 +463,7 @@ void Building::genFacades() {
 	atlasSize = bestSize;
 
 	// Scale each group to UV coords
-	glm::mat4 px2uv;
+	glm::mat4 px2uv = glm::mat4(1.0);
 	px2uv[0][0] = 1.0 / atlasSize.x;
 	px2uv[1][1] = 1.0 / atlasSize.y;
 	atlasTCBuf.resize(posBuf.size(), glm::vec2(-1.0));
@@ -497,6 +497,138 @@ void Building::genFacades() {
 		fi.roof = (glm::dot(fi.normal, { 0.0, 0.0, 1.0 }) > 0.707f);	// Roof if < ~45 deg from +Z
 		facadeInfo.push_back(fi);
 	}
+}
+
+// Writes building data to the data directory
+void Building::genWriteData(fs::path dataDir) {
+	// Create data directories as needed
+	modelDir = dataDir / "regions" / region / cluster / model;
+	if (!fs::exists(modelDir))
+		fs::create_directories(modelDir);
+
+	// Create the output .obj file
+	fs::path objPath = modelDir /
+		(region + "_" + cluster + "_" + model + ".obj");
+	ofstream objFile(objPath);
+
+	// Write all vertex positions
+	for (auto v : posBuf)
+		objFile << setprecision(20) << "v " << v.x << " " << v.y << " " << v.z << endl;
+	objFile << endl;
+	// Write all normals
+	for (auto n : normBuf)
+		objFile << setprecision(20) << "n " << n.x << " " << n.y << " " << n.z << endl;
+	objFile << endl;
+
+	// Keep track of texture coordinate indices
+	int tcIdx = 0;
+
+	// Write all sets of texture coordinates
+	for (auto& si : satInfo) {
+
+		// Create a group for this satellite image
+		objFile << "g " << si.first << endl;
+
+		// Loop through each face
+		for (size_t f = 0; f < indexBuf.size(); f += 3) {
+			glm::vec2 ta = satTCBufs[si.first][indexBuf[f + 0]];
+			glm::vec2 tb = satTCBufs[si.first][indexBuf[f + 1]];
+			glm::vec2 tc = satTCBufs[si.first][indexBuf[f + 2]];
+
+			// Skip if no projection
+			if (ta.x < 0.0 || ta.y < 0.0 ||
+				tb.x < 0.0 || tb.y < 0.0 ||
+				tc.x < 0.0 || tc.y < 0.0) continue;
+
+			// Write texture coordinates
+			objFile << setprecision(20) << "vt " << ta.x << " " << ta.y << endl;
+			objFile << setprecision(20) << "vt " << tb.x << " " << tb.y << endl;
+			objFile << setprecision(20) << "vt " << tc.x << " " << tc.y << endl;
+			// Write face
+			glm::uint idx0 = indexBuf[f + 0];
+			glm::uint idx1 = indexBuf[f + 1];
+			glm::uint idx2 = indexBuf[f + 2];
+			objFile << "f " << idx0 + 1 << "/" << (tcIdx++) + 1 << "/" << idx0 + 1 << " ";
+			objFile << idx1 + 1 << "/" << (tcIdx++) + 1 << "/" << idx1 + 1 << " ";
+			objFile << idx2 + 1 << "/" << (tcIdx++) + 1 << "/" << idx2 + 1 << endl;
+		}
+		objFile << endl;
+	}
+
+	// Write atlas texture coordinates
+	objFile << "g atlas" << endl;
+	for (auto t : atlasTCBuf)
+		objFile << setprecision(20) << "vt " << t.x << " " << t.y << endl;
+	// Write faces
+	for (size_t f = 0; f < indexBuf.size(); f += 3) {
+		glm::uint idx0 = indexBuf[f + 0];
+		glm::uint idx1 = indexBuf[f + 1];
+		glm::uint idx2 = indexBuf[f + 2];
+		objFile << "f " << idx0 + 1 << "/" << idx0 + tcIdx + 1 << "/" << idx0 + 1 << " ";
+		objFile << idx1 + 1 << "/" << idx1 + tcIdx + 1 << "/" << idx1 + 1 << " ";
+		objFile << idx2 + 1 << "/" << idx2 + tcIdx + 1 << "/" << idx2 + 1 << endl;
+	}
+	objFile << endl;
+
+
+	// Create output metadata
+	json meta;
+	meta["region"] = region;
+	meta["cluster"] = cluster;
+	meta["model"] = model;
+	meta["epsgCode"] = epsgCode;
+	meta["origin"][0] = origin.x;
+	meta["origin"][1] = origin.y;
+	meta["origin"][2] = origin.z;
+	meta["minBB"][0] = minBB.x;
+	meta["minBB"][1] = minBB.y;
+	meta["minBB"][2] = minBB.z;
+	meta["maxBB"][0] = maxBB.x;
+	meta["maxBB"][1] = maxBB.y;
+	meta["maxBB"][2] = maxBB.z;
+	meta["atlasSize"][0] = atlasSize.x;
+	meta["atlasSize"][1] = atlasSize.y;
+
+	// Satellite info
+	for (auto& si : satInfo) {
+		json satInfoMeta;
+		satInfoMeta["name"] = si.second.name;
+		satInfoMeta["roi"][0] = si.second.roi.x;
+		satInfoMeta["roi"][1] = si.second.roi.y;
+		satInfoMeta["roi"][2] = si.second.roi.width;
+		satInfoMeta["roi"][3] = si.second.roi.height;
+		satInfoMeta["dir"][0] = si.second.dir.x;
+		satInfoMeta["dir"][1] = si.second.dir.y;
+		satInfoMeta["dir"][2] = si.second.dir.z;
+		satInfoMeta["sun"][0] = si.second.sun.x;
+		satInfoMeta["sun"][1] = si.second.sun.y;
+		satInfoMeta["sun"][2] = si.second.sun.z;
+		meta["satInfo"].push_back(satInfoMeta);
+	}
+
+	// Facade info
+	for (auto& fi : facadeInfo) {
+		json facadeInfoMeta;
+		for (auto f : fi.faceIDs)
+			facadeInfoMeta["faceIDs"].push_back(f);
+		facadeInfoMeta["normal"][0] = fi.normal.x;
+		facadeInfoMeta["normal"][1] = fi.normal.y;
+		facadeInfoMeta["normal"][2] = fi.normal.z;
+		facadeInfoMeta["size"][0] = fi.size.x;
+		facadeInfoMeta["size"][1] = fi.size.y;
+		facadeInfoMeta["atlasBB"][0] = fi.atlasBB.x;
+		facadeInfoMeta["atlasBB"][1] = fi.atlasBB.y;
+		facadeInfoMeta["atlasBB"][2] = fi.atlasBB.width;
+		facadeInfoMeta["atlasBB"][3] = fi.atlasBB.height;
+		facadeInfoMeta["roof"] = fi.roof;
+		meta["facadeInfo"].push_back(facadeInfoMeta);
+	}
+
+	// Write metadata to file
+	fs::path metaPath = objPath;
+	metaPath.replace_extension(".json");
+	ofstream metaFile(metaPath);
+	metaFile << meta << endl;
 }
 
 // Read the .obj file and populate the geometry buffers

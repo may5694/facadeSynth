@@ -182,7 +182,7 @@ bool Canvas::pack(const vector<SurfaceGroup*>& groups, bool edit) {
 					for (unsigned int r = 0; r < idx.y; r++) pos.y += hs[r];
 					if (edit) {
 						// Update the group's transformation
-						glm::mat4 xlate;
+						glm::mat4 xlate = glm::mat4(1.0);
 						xlate[3] = glm::vec4(-g->minBB + pos, 0.0, 1.0);
 						g->xform = xlate * g->xform;
 						// Update the group's bounding box

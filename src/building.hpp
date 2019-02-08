@@ -61,6 +61,7 @@ private:
 	void genReadMetadata(fs::path inputClusterDir);
 	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
 	void genFacades();
+	void genWriteData(fs::path dataDir);
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
