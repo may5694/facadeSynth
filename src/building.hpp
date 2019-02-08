@@ -55,11 +55,12 @@ private:
 	glm::vec3 maxBB;					// Maximal coordinate in bounding box (UTM)
 	glm::uvec2 atlasSize;				// Width, height of atlas texture (px)
 	std::map<std::string, SatInfo> satInfo;		// Per-satellite info
-	std::map<uint32_t, FacadeInfo> facadeInfo;	// Per-facade info
+	std::vector<FacadeInfo> facadeInfo;			// Per-facade info
 
 	// Generation methods
 	void genReadMetadata(fs::path inputClusterDir);
 	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
+	void genFacades();
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
@@ -75,8 +76,7 @@ struct SatInfo {
 
 // Holds information about a facade
 struct FacadeInfo {
-	uint32_t id;					// Facade ID
-	std::vector<glm::uint> faces;	// List of face IDs within this facade
+	std::vector<int> faceIDs;		// List of face IDs within this facade
 	glm::vec3 normal;				// Normalized facing direction (UTM)
 	glm::uvec2 size;				// Width, height of rectified facade (px)
 	cv::Rect2f atlasBB;				// Bounding rect in atlas (UV, LL origin)
