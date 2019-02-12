@@ -511,15 +511,19 @@ void Building::genFacades() {
 
 		// Transform each vertex and store in atlas TC buffer
 		glm::vec2 uvMinBB(FLT_MAX), uvMaxBB(-FLT_MAX);
+		float minH(FLT_MAX), maxH(-FLT_MAX);
 		for (auto f : g.second.faceIDs) {
 			for (size_t vi = 0; vi < 3; vi++) {
 				glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
-				v = glm::vec3(g.second.xform * glm::vec4(v, 1.0));
-				atlasTCBuf[indexBuf[3 * f + vi]] = glm::vec2(v);
+				glm::vec2 av = glm::vec2(g.second.xform * glm::vec4(v, 1.0));
+				atlasTCBuf[indexBuf[3 * f + vi]] = av;
 
 				// Update UV bounding box
-				uvMinBB = glm::min(uvMinBB, glm::vec2(v));
-				uvMaxBB = glm::max(uvMaxBB, glm::vec2(v));
+				uvMinBB = glm::min(uvMinBB, glm::vec2(av));
+				uvMaxBB = glm::max(uvMaxBB, glm::vec2(av));
+				// Update height bounds
+				minH = glm::min(minH, v.z);
+				maxH = glm::max(maxH, v.z);
 			}
 		}
 
@@ -532,6 +536,8 @@ void Building::genFacades() {
 		fi.atlasBB.y = uvMinBB.y;
 		fi.atlasBB.width = (uvMaxBB - uvMinBB).x;
 		fi.atlasBB.height = (uvMaxBB - uvMinBB).y;
+		fi.height = maxH - minH;
+		fi.ground = (abs(minH - minBB.z) < 1e-4);
 		fi.roof = (glm::dot(fi.normal, { 0.0, 0.0, 1.0 }) > 0.707f);	// Roof if < ~45 deg from +Z
 		facadeInfo.push_back(fi);
 	}
@@ -658,6 +664,8 @@ void Building::genWriteData(fs::path dataDir) {
 		facadeInfoMeta["atlasBB"][1] = fi.atlasBB.y;
 		facadeInfoMeta["atlasBB"][2] = fi.atlasBB.width;
 		facadeInfoMeta["atlasBB"][3] = fi.atlasBB.height;
+		facadeInfoMeta["height"] = fi.height;
+		facadeInfoMeta["ground"] = fi.ground;
 		facadeInfoMeta["roof"] = fi.roof;
 		meta["facadeInfo"].push_back(facadeInfoMeta);
 	}
@@ -856,6 +864,10 @@ void Building::loadMetadata(fs::path metaPath) {
 		fi.atlasBB.y = meta.at("facadeInfo").at(f).at("atlasBB").at(1);
 		fi.atlasBB.width = meta.at("facadeInfo").at(f).at("atlasBB").at(2);
 		fi.atlasBB.height = meta.at("facadeInfo").at(f).at("atlasBB").at(3);
+		// Height of the facade (UTM)
+		fi.height = meta.at("facadeInfo").at(f).at("height");
+		// Whether facade touches the ground
+		fi.ground = meta.at("facadeInfo").at(f).at("ground");
 		// Whether this is a roof facade
 		fi.roof = meta.at("facadeInfo").at(f).at("roof");
 

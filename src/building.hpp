@@ -81,6 +81,8 @@ struct FacadeInfo {
 	glm::vec3 normal;				// Normalized facing direction (UTM)
 	glm::uvec2 size;				// Width, height of rectified facade (px)
 	cv::Rect2f atlasBB;				// Bounding rect in atlas (UV, LL origin)
+	float height;					// Height of facade (UTM)
+	bool ground;					// Whether facade touches the ground
 	bool roof;						// Whether facade is a roof
 };
 
