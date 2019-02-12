@@ -148,7 +148,7 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 	vector<tinyobj::shape_t> shapes;
 	string objWarn, objErr;
 	bool objLoaded = tinyobj::LoadObj(&attrib, &shapes, NULL, &objWarn, &objErr,
-		objPath.string().c_str(), NULL, false);
+		objPath.string().c_str(), NULL, true);
 	// Check for errors
 	if (!objLoaded) {
 		stringstream ss;
@@ -192,6 +192,44 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 		for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
 			int fv = shapes[s].mesh.num_face_vertices[f];
 			map<string, vector<glm::vec2>> satPts;
+
+			// Skip degenerate and down-facing triangles
+			{ tinyobj::index_t ia = shapes[s].mesh.indices[idx_offset + 0];
+			glm::vec3 va;
+			va.x = attrib.vertices[3 * ia.vertex_index + 0];
+			va.y = attrib.vertices[3 * ia.vertex_index + 1];
+			va.z = attrib.vertices[3 * ia.vertex_index + 2];
+			tinyobj::index_t ib = shapes[s].mesh.indices[idx_offset + 1];
+			glm::vec3 vb;
+			vb.x = attrib.vertices[3 * ib.vertex_index + 0];
+			vb.y = attrib.vertices[3 * ib.vertex_index + 1];
+			vb.z = attrib.vertices[3 * ib.vertex_index + 2];
+			tinyobj::index_t ic = shapes[s].mesh.indices[idx_offset + 2];
+			glm::vec3 vc;
+			vc.x = attrib.vertices[3 * ic.vertex_index + 0];
+			vc.y = attrib.vertices[3 * ic.vertex_index + 1];
+			vc.z = attrib.vertices[3 * ic.vertex_index + 2];
+
+			// Sort edge lengths
+			vector<float> lengths;
+			lengths.push_back(glm::length(vb - va));
+			lengths.push_back(glm::length(vc - vb));
+			lengths.push_back(glm::length(va - vc));
+			sort(lengths.begin(), lengths.end());
+			// Degenerate if largest edge <= sum of smaller edges
+			if (lengths[0] + lengths[1] <= lengths[2] + 1e-4) {
+				idx_offset += fv;
+				cout << "Degenerate triangle! "
+					<< lengths[0] << " " << lengths[1] << " " << lengths[2] << endl;
+				continue;
+			}
+
+			// Skip if facing downward
+			glm::vec3 normal = glm::normalize(glm::cross(vb - va, vc - va));
+			if (1.0 - glm::dot(normal, { 0.0, 0.0, -1.0 }) < 1e-4) {
+				idx_offset += fv;
+				continue;
+			}}
 
 			// Assume this triangle faces away from all satellite images
 			bool allBackfacing = true;
@@ -517,7 +555,7 @@ void Building::genWriteData(fs::path dataDir) {
 	objFile << endl;
 	// Write all normals
 	for (auto n : normBuf)
-		objFile << setprecision(20) << "n " << n.x << " " << n.y << " " << n.z << endl;
+		objFile << setprecision(20) << "vn " << n.x << " " << n.y << " " << n.z << endl;
 	objFile << endl;
 
 	// Keep track of texture coordinate indices
