@@ -62,6 +62,9 @@ private:
 	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
 	void genFacades();
 	void genWriteData(fs::path dataDir);
+	void genSatelliteTextures(fs::path dataDir, std::map<std::string, Satellite>& sats);
+	void genFacadeTextures();
+	void genAtlasTextures();
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);

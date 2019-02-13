@@ -54,6 +54,9 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 
 	// Write generated data to disk
 	genWriteData(dataDir);
+
+	// Save cropped satellite images
+	genSatelliteTextures(dataDir, sats);
 }
 
 // Load building data from data directory
@@ -676,6 +679,48 @@ void Building::genWriteData(fs::path dataDir) {
 	ofstream metaFile(metaPath);
 	metaFile << meta << endl;
 }
+
+// Save cropped versions of all satellite images and masks
+void Building::genSatelliteTextures(fs::path dataDir, map<string, Satellite>& sats) {
+	// Create directory for satellite images
+	fs::path satDir = modelDir / "sats";
+	if (!fs::exists(satDir))
+		fs::create_directory(satDir);
+
+	// Iterate over all used satellites
+	for (auto& si : satInfo) {
+		Satellite& sat = sats[si.first];
+
+		// Save a cropped version of the image
+		fs::path satPath = satDir / (si.second.name + "_ps.png");
+		cv::imwrite(satPath.string(), sat.satImg(si.second.roi));
+	}
+
+	// Look for cluster masks
+	fs::path clusterMasksDir = dataDir / "regions" / region / "clusterMasks" / model;
+	set<string> masksFound;
+	fs::directory_iterator di(clusterMasksDir), dend;
+	for (; di != dend; ++di) {
+		// Skip if not an image file with a matching prefix to a sat dataset
+		if (!fs::is_regular_file(di->path())) continue;
+		if (di->path().extension().string() != ".png") continue;
+		string prefix = di->path().filename().string().substr(0, 13);
+		if (!satInfo.count(prefix)) continue;
+
+		// Save a cropped version of the cluster mask
+		fs::path maskPath = satDir / (prefix + "_cid.png");
+		cv::Mat cmask = cv::imread(di->path().string(), CV_LOAD_IMAGE_UNCHANGED);
+		cv::imwrite(maskPath.string(), cmask(satInfo[prefix].roi));
+		masksFound.insert(prefix);
+	}
+	// Warn for all masks not found
+	for (auto& si : satInfo)
+		if (!masksFound.count(si.first))
+			cout << "Cluster mask for " << si.first << " missing!" << endl;
+}
+
+void Building::genFacadeTextures() {}
+void Building::genAtlasTextures() {}
 
 // Read the .obj file and populate the geometry buffers
 void Building::loadGeometry(fs::path objPath) {
