@@ -12,18 +12,23 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 find_package(Torch REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(GDAL REQUIRED)
+find_package(OpenGL REQUIRED)
 
 set(SOURCES
 	src/main.cpp
 	src/satellite.cpp
 	src/building.cpp
 	src/dn_predict.cpp
-	src/util.cpp)
+	src/util.cpp
+	src/openglcontext.cpp
+	src/gl46.c)
 
 add_executable(facadeSynth ${SOURCES})
 target_link_libraries(facadeSynth ${TORCH_LIBRARIES})
 target_link_libraries(facadeSynth ${OpenCV_LIBS})
 target_link_libraries(facadeSynth ${GDAL_LIBRARY})
 target_link_libraries(facadeSynth stdc++fs)
+target_link_libraries(facadeSynth GL)
+target_link_libraries(facadeSynth EGL)
 
 install(TARGETS facadeSynth DESTINATION .)

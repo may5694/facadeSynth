@@ -3,6 +3,8 @@
 #include "util.hpp"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
+#include "openglcontext.hpp"
+#include "gl46.h"
 using namespace std;
 using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
@@ -55,8 +57,8 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 	// Write generated data to disk
 	genWriteData(dataDir);
 
-	// Save cropped satellite images
-	genSatelliteTextures(dataDir, sats);
+	// Save satellite, facade, and atlas textures
+	genTextures(dataDir, sats);
 }
 
 // Load building data from data directory
@@ -681,7 +683,7 @@ void Building::genWriteData(fs::path dataDir) {
 }
 
 // Save cropped versions of all satellite images and masks
-void Building::genSatelliteTextures(fs::path dataDir, map<string, Satellite>& sats) {
+void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 	// Create directory for satellite images
 	fs::path satDir = modelDir / "sats";
 	if (!fs::exists(satDir))
@@ -717,10 +719,12 @@ void Building::genSatelliteTextures(fs::path dataDir, map<string, Satellite>& sa
 	for (auto& si : satInfo)
 		if (!masksFound.count(si.first))
 			cout << "Cluster mask for " << si.first << " missing!" << endl;
-}
 
-void Building::genFacadeTextures() {}
-void Building::genAtlasTextures() {}
+
+	// Initialize OpenGL
+	OpenGLContext ctx;
+
+}
 
 // Read the .obj file and populate the geometry buffers
 void Building::loadGeometry(fs::path objPath) {
