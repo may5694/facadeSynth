@@ -686,7 +686,7 @@ void Building::genWriteData(fs::path dataDir) {
 // Save cropped versions of all satellite images and masks
 void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 	// Create directory for satellite images
-	fs::path satDir = modelDir / "sats";
+	fs::path satDir = modelDir / "sat";
 	if (!fs::exists(satDir))
 		fs::create_directory(satDir);
 
@@ -872,7 +872,7 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 
 
 	// Create facade directory
-	fs::path facadeDir = modelDir / "facades";
+	fs::path facadeDir = modelDir / "facade";
 	if (!fs::exists(facadeDir))
 		fs::create_directory(facadeDir);
 	// Iterate over all facades
@@ -962,6 +962,69 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 			fs::path maskPath = facadeIDDir / (si.first + "_cid.png");
 			cv::imwrite(maskPath.string(), maskImg);
 		}
+	}
+
+
+	// Resize framebuffer and viewport for atlas textures
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlasSize.x, atlasSize.y, 0,
+		GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glViewport(0, 0, atlasSize.x, atlasSize.y);
+
+	// Translate midpoint to 0, 0
+	glm::mat4 xlate(1.0);
+	xlate[3] = glm::vec4(-0.5, -0.5, 0.0, 1.0);
+	// Scale to -1, 1
+	glm::mat4 scale(1.0);
+	scale[0][0] = 2.0;
+	scale[1][1] = 2.0;
+	// Combine and set transformation matrix
+	glm::mat4 xform = scale * xlate;
+	glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(xform));
+
+	// Create atlas directory
+	fs::path atlasDir = modelDir / "atlas";
+	if (!fs::exists(atlasDir))
+		fs::create_directory(atlasDir);
+	// Iterate over all satellites
+	for (auto& si : satInfo) {
+		// Bind vertex arrays
+		glBindVertexArray(svaos[si.first]);
+		// Bind satellite texture
+		glBindTexture(GL_TEXTURE_2D, satTexs[si.first]);
+
+		glClear(GL_COLOR_BUFFER_BIT);
+		// Draw all triangles
+		glDrawElements(GL_TRIANGLES, indexBuf.size(), GL_UNSIGNED_INT, 0);
+
+		// Download rendered texture
+		cv::Mat atlasImg(atlasSize.y, atlasSize.x, CV_8UC4);
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, atlasImg.data);
+		cv::flip(atlasImg, atlasImg, 0);
+
+		// Save to disk
+		fs::path atlasPath = atlasDir / (si.first + "_ps.png");
+		cv::imwrite(atlasPath.string(), atlasImg);
+
+
+		// Bind cluster mask texture
+		glBindTexture(GL_TEXTURE_2D, maskTexs[si.first]);
+
+		glClear(GL_COLOR_BUFFER_BIT);
+		// Draw all triangles
+		glDrawElements(GL_TRIANGLES, indexBuf.size(), GL_UNSIGNED_INT, 0);
+
+		// Download rendered texture
+		cv::Mat maskImg(atlasSize.y, atlasSize.x, CV_8UC1);
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, maskImg.data);
+		cv::flip(maskImg, maskImg, 0);
+
+		// Save to disk
+		fs::path maskPath = atlasDir / (si.first + "_cid.png");
+		cv::imwrite(maskPath.string(), maskImg);
 	}
 }
 
