@@ -1,3 +1,4 @@
+#include <glm/gtc/type_ptr.hpp>
 #include "building.hpp"
 #include "json.hpp"
 #include "util.hpp"
@@ -723,7 +724,245 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 
 	// Initialize OpenGL
 	OpenGLContext ctx;
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
+	// Create framebuffer texture
+	GLuint fbtex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	// Create framebuffer object
+	GLuint fbo = ctx.genFramebuffer();
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
+
+	// Create vertex buffers
+	GLuint atbuf = ctx.genBuffer();
+	glBindBuffer(GL_ARRAY_BUFFER, atbuf);
+	glBufferData(GL_ARRAY_BUFFER, atlasTCBuf.size() * sizeof(atlasTCBuf[0]),
+		atlasTCBuf.data(), GL_STATIC_DRAW);
+	map<string, GLuint> stbufs;
+	for (auto& si : satInfo) {
+		stbufs[si.first] = ctx.genBuffer();
+		glBindBuffer(GL_ARRAY_BUFFER, stbufs[si.first]);
+		glBufferData(GL_ARRAY_BUFFER, satTCBufs[si.first].size() * sizeof(satTCBufs[si.first][0]),
+			satTCBufs[si.first].data(), GL_STATIC_DRAW);
+	}
+	GLuint ibuf = ctx.genBuffer();
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexBuf.size() * sizeof(indexBuf[0]),
+		indexBuf.data(), GL_STATIC_DRAW);
+
+	// Create vertex array objects
+	map<string, GLuint> svaos;
+	for (auto& si : satInfo) {
+		svaos[si.first] = ctx.genVAO();
+		glBindVertexArray(svaos[si.first]);
+		glBindBuffer(GL_ARRAY_BUFFER, atbuf);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+		glBindBuffer(GL_ARRAY_BUFFER, stbufs[si.first]);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+	}
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	// Vertex shader
+	static const string vsh_str = R"(
+		#version 460
+
+		layout (location = 0) in vec2 pos;
+		layout (location = 1) in vec2 tc;
+
+		smooth out vec2 geoTC;
+
+		uniform mat4 xform;
+
+		void main() {
+			gl_Position = xform * vec4(pos, 0.0, 1.0);
+			geoTC = tc;
+		})";
+	// Geometry shader
+	static const string gsh_str = R"(
+		#version 460
+
+		layout (triangles) in;
+		layout (triangle_strip, max_vertices = 3) out;
+
+		smooth in vec2 geoTC[];
+
+		smooth out vec2 fragTC;
+
+		void main() {
+			// Skip triangles without valid texture coords
+			if (geoTC[0].x < 0.0 || geoTC[0].y < 0.0 ||
+				geoTC[1].x < 0.0 || geoTC[1].y < 0.0 ||
+				geoTC[2].x < 0.0 || geoTC[2].y < 0.0) return;
+
+			gl_Position = gl_in[0].gl_Position;
+			fragTC = geoTC[0];
+			EmitVertex();
+
+			gl_Position = gl_in[1].gl_Position;
+			fragTC = geoTC[1];
+			EmitVertex();
+
+			gl_Position = gl_in[2].gl_Position;
+			fragTC = geoTC[2];
+			EmitVertex();
+
+			EndPrimitive();
+		})";
+	// Fragment shader
+	static const string fsh_str = R"(
+		#version 460
+
+		smooth in vec2 fragTC;
+
+		out vec4 outCol;
+
+		uniform sampler2D texSampler;
+
+		void main() {
+			outCol = texture(texSampler, fragTC);
+		})";
+
+	// Compile and link shaders
+	vector<GLuint> shaders;
+	shaders.push_back(ctx.compileShader(GL_VERTEX_SHADER, vsh_str));
+	shaders.push_back(ctx.compileShader(GL_GEOMETRY_SHADER, gsh_str));
+	shaders.push_back(ctx.compileShader(GL_FRAGMENT_SHADER, fsh_str));
+	GLuint program = ctx.linkProgram(shaders);
+	GLuint xformLoc = glGetUniformLocation(program, "xform");
+	glUseProgram(program);
+
+	// Upload satellite images and masks to textures
+	map<string, GLuint> satTexs;
+	map<string, GLuint> maskTexs;
+	for (auto& si : satInfo) {
+		fs::path satPath = satDir / (si.first + "_ps.png");
+		cv::Mat satImg = cv::imread(satPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		cv::flip(satImg, satImg, 0);
+
+		satTexs[si.first] = ctx.genTexture();
+		glBindTexture(GL_TEXTURE_2D, satTexs[si.first]);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, satImg.cols, satImg.rows, 0,
+			GL_BGR, GL_UNSIGNED_BYTE, satImg.data);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+		fs::path maskPath = satDir / (si.first + "_cid.png");
+		cv::Mat maskImg = cv::imread(maskPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		cv::flip(maskImg, maskImg, 0);
+
+		maskTexs[si.first] = ctx.genTexture();
+		glBindTexture(GL_TEXTURE_2D, maskTexs[si.first]);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, maskImg.cols, maskImg.rows, 0,
+			GL_RED, GL_UNSIGNED_BYTE, maskImg.data);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	}
+
+
+	// Create facade directory
+	fs::path facadeDir = modelDir / "facades";
+	if (!fs::exists(facadeDir))
+		fs::create_directory(facadeDir);
+	// Iterate over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		// Create facade ID directory
+		fs::path facadeIDDir; {
+			stringstream ss; ss << setw(4) << setfill('0') << fi;
+			facadeIDDir = facadeDir / ss.str();
+		}
+		if (!fs::exists(facadeIDDir))
+			fs::create_directory(facadeIDDir);
+
+		// Resize framebuffer texture
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, facadeInfo[fi].size.x, facadeInfo[fi].size.y, 0,
+			GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		// Set viewport
+		glViewport(0, 0, facadeInfo[fi].size.x, facadeInfo[fi].size.y);
+
+		// Setup transformation matrix
+		cv::Rect2f atlasBB = facadeInfo[fi].atlasBB;
+		glm::mat4 xlate(1.0);
+		xlate[3] = glm::vec4(
+			-(atlasBB.x + atlasBB.width / 2.0),
+			-(atlasBB.y + atlasBB.height / 2.0),
+			0.0, 1.0);
+		glm::mat4 scale(1.0);
+		scale[0][0] = 2.0 / atlasBB.width;
+		scale[1][1] = 2.0 / atlasBB.height;
+		glm::mat4 xform = scale * xlate;
+		glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(xform));
+
+		// Iterate over all satellites
+		for (auto& si : satInfo) {
+			// Skip if not observed by this sat
+			bool observed = false;
+			for (auto f : facadeInfo[fi].faceIDs) {
+				glm::vec2 ta = satTCBufs[si.first][indexBuf[3 * f + 0]];
+				glm::vec2 tb = satTCBufs[si.first][indexBuf[3 * f + 1]];
+				glm::vec2 tc = satTCBufs[si.first][indexBuf[3 * f + 2]];
+				if (ta.x >= 0.0 && ta.y >= 0.0 &&
+					tb.x >= 0.0 && tb.y >= 0.0 &&
+					tc.x >= 0.0 && tc.y >= 0.0) {
+					observed = true;
+					break;
+				}
+			}
+			if (!observed) continue;
+
+			// Bind vertex arrays
+			glBindVertexArray(svaos[si.first]);
+			// Bind satellite texture
+			glBindTexture(GL_TEXTURE_2D, satTexs[si.first]);
+
+			glClear(GL_COLOR_BUFFER_BIT);
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+
+			// Download rendered texture
+			cv::Mat facadeImg(facadeInfo[fi].size.y, facadeInfo[fi].size.x, CV_8UC4);
+			glBindTexture(GL_TEXTURE_2D, fbtex);
+			glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, facadeImg.data);
+			cv::flip(facadeImg, facadeImg, 0);
+
+			// Save to disk
+			fs::path facadePath = facadeIDDir / (si.first + "_ps.png");
+			cv::imwrite(facadePath.string(), facadeImg);
+
+
+			// Bind cluster mask
+			glBindTexture(GL_TEXTURE_2D, maskTexs[si.first]);
+
+			glClear(GL_COLOR_BUFFER_BIT);
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+
+			// Download rendered texture
+			cv::Mat maskImg(facadeInfo[fi].size.y, facadeInfo[fi].size.x, CV_8UC1);
+			glBindTexture(GL_TEXTURE_2D, fbtex);
+			glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, maskImg.data);
+			cv::flip(maskImg, maskImg, 0);
+
+			// Save to disk
+			fs::path maskPath = facadeIDDir / (si.first + "_cid.png");
+			cv::imwrite(maskPath.string(), maskImg);
+		}
+	}
 }
 
 // Read the .obj file and populate the geometry buffers
