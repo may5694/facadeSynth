@@ -11,8 +11,8 @@ using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
 
 // Generate building data from input directory, and save it to data directory
-void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satellite>& sats,
-	string region, string cluster, string model) {
+void Building::generate(fs::path inputDir, fs::path satelliteDir, fs::path dataDir,
+	map<string, Satellite>& sats, string region, string cluster, string model) {
 	// Clear any existing contents
 	clear();
 
@@ -59,7 +59,7 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 	genWriteData(dataDir);
 
 	// Save satellite, facade, and atlas textures
-	genTextures(dataDir, sats);
+	genTextures(dataDir, satelliteDir, sats);
 }
 
 // Load building data from data directory
@@ -533,9 +533,31 @@ void Building::genFacades() {
 			}
 		}
 
+		// Keep track of which satellites observe this facade
+		set<string> inSats;
+		// Iterate over satellites
+		for (auto si : satInfo) {
+			bool observed = false;
+			// Iterate over faces in this group
+			for (auto f : g.second.faceIDs) {
+				glm::vec2 ta = satTCBufs[si.first][indexBuf[3 * f + 0]];
+				glm::vec2 tb = satTCBufs[si.first][indexBuf[3 * f + 1]];
+				glm::vec2 tc = satTCBufs[si.first][indexBuf[3 * f + 2]];
+				if (ta.x >= 0.0 && ta.y >= 0.0 &&
+					tb.x >= 0.0 && tb.y >= 0.0 &&
+					tc.x >= 0.0 && tc.y >= 0.0) {
+					observed = true;
+					break;
+				}
+			}
+			if (!observed) continue;
+			inSats.insert(si.first);
+		}
+
 		// Store facade info
 		FacadeInfo fi;
 		fi.faceIDs = g.second.faceIDs;
+		fi.inSats = std::move(inSats);
 		fi.normal = glm::normalize(glm::vec3(g.first));
 		fi.size = glm::uvec2(g.second.maxBB - g.second.minBB);
 		fi.atlasBB.x = uvMinBB.x;
@@ -661,6 +683,8 @@ void Building::genWriteData(fs::path dataDir) {
 		json facadeInfoMeta;
 		for (auto f : fi.faceIDs)
 			facadeInfoMeta["faceIDs"].push_back(f);
+		for (auto s : fi.inSats)
+			facadeInfoMeta["inSats"].push_back(s);
 		facadeInfoMeta["normal"][0] = fi.normal.x;
 		facadeInfoMeta["normal"][1] = fi.normal.y;
 		facadeInfoMeta["normal"][2] = fi.normal.z;
@@ -684,7 +708,7 @@ void Building::genWriteData(fs::path dataDir) {
 }
 
 // Save cropped versions of all satellite images and masks
-void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
+void Building::genTextures(fs::path dataDir, fs::path satelliteDir, map<string, Satellite>& sats) {
 	// Create directory for satellite images
 	fs::path satDir = modelDir / "sat";
 	if (!fs::exists(satDir))
@@ -692,7 +716,7 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 
 	// Iterate over all used satellites
 	for (auto& si : satInfo) {
-		Satellite& sat = sats[si.first];
+		Satellite& sat = sats.at(si.first);
 
 		// Save a cropped version of the image
 		fs::path satPath = satDir / (si.second.name + "_ps.png");
@@ -700,7 +724,7 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 	}
 
 	// Look for cluster masks
-	fs::path clusterMasksDir = dataDir / "regions" / region / "clusterMasks" / model;
+	fs::path clusterMasksDir = satelliteDir / region / "clusterMasks" / model;
 	set<string> masksFound;
 	fs::directory_iterator di(clusterMasksDir), dend;
 	for (; di != dend; ++di) {
@@ -860,6 +884,7 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 
 		fs::path maskPath = satDir / (si.first + "_cid.png");
 		cv::Mat maskImg = cv::imread(maskPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		if (!maskImg.data) continue;
 		cv::flip(maskImg, maskImg, 0);
 
 		maskTexs[si.first] = ctx.genTexture();
@@ -909,19 +934,8 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 		// Iterate over all satellites
 		for (auto& si : satInfo) {
 			// Skip if not observed by this sat
-			bool observed = false;
-			for (auto f : facadeInfo[fi].faceIDs) {
-				glm::vec2 ta = satTCBufs[si.first][indexBuf[3 * f + 0]];
-				glm::vec2 tb = satTCBufs[si.first][indexBuf[3 * f + 1]];
-				glm::vec2 tc = satTCBufs[si.first][indexBuf[3 * f + 2]];
-				if (ta.x >= 0.0 && ta.y >= 0.0 &&
-					tb.x >= 0.0 && tb.y >= 0.0 &&
-					tc.x >= 0.0 && tc.y >= 0.0) {
-					observed = true;
-					break;
-				}
-			}
-			if (!observed) continue;
+			if (!facadeInfo[fi].inSats.count(si.first))
+				continue;
 
 			// Bind vertex arrays
 			glBindVertexArray(svaos[si.first]);
@@ -943,6 +957,9 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 			fs::path facadePath = facadeIDDir / (si.first + "_ps.png");
 			cv::imwrite(facadePath.string(), facadeImg);
 
+
+			// Skip cluster mask if it doesn't exist
+			if (!maskTexs.count(si.first)) continue;
 
 			// Bind cluster mask
 			glBindTexture(GL_TEXTURE_2D, maskTexs[si.first]);
@@ -1008,6 +1025,9 @@ void Building::genTextures(fs::path dataDir, map<string, Satellite>& sats) {
 		fs::path atlasPath = atlasDir / (si.first + "_ps.png");
 		cv::imwrite(atlasPath.string(), atlasImg);
 
+
+		// Skip cluster mask if it doesn't exist
+		if (!maskTexs.count(si.first)) continue;
 
 		// Bind cluster mask texture
 		glBindTexture(GL_TEXTURE_2D, maskTexs[si.first]);
@@ -1202,6 +1222,10 @@ void Building::loadMetadata(fs::path metaPath) {
 		// List of face IDs in this facade
 		for (size_t i = 0; i < meta.at("facadeInfo").at(f).at("faceIDs").size(); i++) {
 			fi.faceIDs.push_back(meta.at("facadeInfo").at(f).at("faceIDs").at(i));
+		}
+		// List of satellites observing this facade
+		for (size_t i = 0; i < meta.at("facadeInfo").at(f).at("inSats").size(); i++) {
+			fi.inSats.insert(meta.at("facadeInfo").at(f).at("inSats").at(i).get<string>());
 		}
 		// Normalized facing direction (UTM)
 		fi.normal.x = meta.at("facadeInfo").at(f).at("normal").at(0);

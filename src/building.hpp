@@ -15,7 +15,8 @@ struct FacadeInfo;
 class Building {
 public:
 	// Generate building data
-	void generate(fs::path regionDir, fs::path dataDir, std::map<std::string, Satellite>& sats,
+	void generate(fs::path regionDir, fs::path satelliteDir, fs::path dataDir,
+		std::map<std::string, Satellite>& sats,
 		std::string region, std::string cluster, std::string model);
 	// Load existing building data
 	void load(fs::path dataDir, std::string region, std::string cluster, std::string model);
@@ -62,7 +63,7 @@ private:
 	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
 	void genFacades();
 	void genWriteData(fs::path dataDir);
-	void genTextures(fs::path dataDir, std::map<std::string, Satellite>& sats);
+	void genTextures(fs::path dataDir, fs::path satelliteDir, std::map<std::string, Satellite>& sats);
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
@@ -79,6 +80,7 @@ struct SatInfo {
 // Holds information about a facade
 struct FacadeInfo {
 	std::vector<int> faceIDs;		// List of face IDs within this facade
+	std::set<std::string> inSats;	// Which satellites this facade appears in
 	glm::vec3 normal;				// Normalized facing direction (UTM)
 	glm::uvec2 size;				// Width, height of rectified facade (px)
 	cv::Rect2f atlasBB;				// Bounding rect in atlas (UV, LL origin)

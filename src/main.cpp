@@ -94,7 +94,8 @@ int main(int argc, char** argv) {
 				// Load or generate building
 				if (opts.generate) {
 					cout << "Generating cluster " << cidStr << "..." << endl;
-					b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cidStr, opts.model);
+					b.generate(opts.regionDir, opts.satelliteDir, opts.dataDir, sats,
+						opts.region, cidStr, opts.model);
 				} else {
 					cout << "Loading cluster " << cidStr << "..." << endl;
 					b.load(opts.dataDir, opts.region, cidStr, opts.model);
@@ -273,13 +274,13 @@ void checkDirectories(Options& opts) {
 			throw runtime_error("No clusters for region \"" + opts.region + "\"");
 
 		// Check if satellite images exist
-		if (!fs::exists(opts.satelliteDir / opts.region) || fs::is_empty(opts.satelliteDir / opts.region))
+		fs::path pansharpenedDir = opts.satelliteDir / opts.region / "pansharpened";
+		if (!fs::exists(pansharpenedDir) || fs::is_empty(pansharpenedDir))
 			throw runtime_error("No satellite images for region \"" + opts.region + "\"");
 
 		// Check if cluster masks exist
-		fs::path clusterMaskDir = opts.dataDir / "regions" / opts.region / "clusterMasks" / opts.model;
+		fs::path clusterMaskDir = opts.satelliteDir / opts.region / "clusterMasks" / opts.model;
 		if (!fs::exists(clusterMaskDir) || fs::is_empty(clusterMaskDir))
-			// TODO: generate cluster masks if needed
 			throw runtime_error("No cluster masks for region \"" + opts.region + "\", model \"" + opts.model + "\"");
 
 		// Create data directory if it doesn't exist
@@ -295,11 +296,13 @@ void checkDirectories(Options& opts) {
 		if (!fs::exists(opts.dataDir)) {
 			stringstream ss;
 			ss << "Data directory " << opts.dataDir << " does not exist!";
+			ss << endl << "Use -g to generate cluster data";
 			throw runtime_error(ss.str());
 		}
 		if (!fs::exists(opts.dataDir / "regions" / opts.region)) {
 			stringstream ss;
 			ss << "No data for region \"" << opts.region << "\"";
+			ss << endl << "Use -g to generate cluster data";
 			throw runtime_error(ss.str());
 		}
 	}
@@ -355,7 +358,7 @@ void checkDirectories(Options& opts) {
 
 // Reads all satellite datasets and returns a map of satellite name to Satellite object
 map<string, Satellite> loadSatellites(Options& opts) {
-	fs::path satDir = opts.satelliteDir / opts.region;
+	fs::path satDir = opts.satelliteDir / opts.region / "pansharpened";
 	map<string, Satellite> sats;
 	for (fs::directory_iterator di(satDir), dend; di != dend; ++di) {
 		// Skip non-files and those not ending in .tif
