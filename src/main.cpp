@@ -4,12 +4,15 @@
 #include <iomanip>
 #include <set>
 #include <experimental/filesystem>
-#include "json.hpp"
+#include <rapidjson/document.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/istreamwrapper.h>
+#include <rapidjson/ostreamwrapper.h>
 #include "satellite.hpp"
 #include "building.hpp"
 #include "dn_predict.hpp"
 using namespace std;
-using json = nlohmann::json;
+namespace rj = rapidjson;
 namespace fs = std::experimental::filesystem;
 
 // Program options
@@ -207,18 +210,22 @@ Options parseCmd(int argc, char** argv) {
 // Generates a template config file at the specified path
 void genConfig(fs::path configPath) {
 	try {
-		json templateConfig;
+		rj::Document templateConfig;
+		templateConfig.SetObject();
 		// Directory settings
-		templateConfig["regionDir"] = "";
-		templateConfig["satelliteDir"] = "";
-		templateConfig["dataDir"] = "";
-		templateConfig["outputDir"] = "";
+		templateConfig.AddMember("regionDir", "", templateConfig.GetAllocator());
+		templateConfig.AddMember("satelliteDir", "", templateConfig.GetAllocator());
+		templateConfig.AddMember("dataDir", "", templateConfig.GetAllocator());
+		templateConfig.AddMember("outputDir", "", templateConfig.GetAllocator());
 
 		// Write template config to file
 		ofstream templateFile;
 		templateFile.exceptions(ios::badbit | ios::failbit | ios::eofbit);
 		templateFile.open(configPath);
-		templateFile << setw(4) << templateConfig;
+		rj::OStreamWrapper osw(templateFile);
+		rj::PrettyWriter<rj::OStreamWrapper> writer(osw);
+		templateConfig.Accept(writer);
+		templateFile << endl;
 
 	} catch (const exception& e) {
 		stringstream ss;
@@ -232,14 +239,15 @@ void readConfig(Options& opts) {
 	try {
 		// Read the config file
 		ifstream configFile(opts.configPath);
-		json config;
-		configFile >> config;
+		rj::IStreamWrapper isw(configFile);
+		rj::Document config;
+		config.ParseStream(isw);
 
 		// Store parameters
-		opts.regionDir = config.at("regionDir").get<string>();
-		opts.satelliteDir = config.at("satelliteDir").get<string>();
-		opts.dataDir = config.at("dataDir").get<string>();
-		opts.outputDir = config.at("outputDir").get<string>();
+		opts.regionDir = config["regionDir"].GetString();
+		opts.satelliteDir = config["satelliteDir"].GetString();
+		opts.dataDir = config["dataDir"].GetString();
+		opts.outputDir = config["outputDir"].GetString();
 
 	// Add message to errors while reading
 	} catch (const exception& e) {

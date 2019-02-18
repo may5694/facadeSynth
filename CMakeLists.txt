@@ -9,6 +9,7 @@ project(facadeSynth)
 set(CMAKE_INSTALL_PREFIX ${PROJECT_SOURCE_DIR})
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+find_package(RapidJSON REQUIRED)
 find_package(Torch REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(GDAL REQUIRED)

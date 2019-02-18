@@ -1,14 +1,17 @@
 #include <glm/gtc/type_ptr.hpp>
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
+#include <rapidjson/ostreamwrapper.h>
+#include <rapidjson/prettywriter.h>
 #include "building.hpp"
-#include "json.hpp"
 #include "util.hpp"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 #include "openglcontext.hpp"
 #include "gl46.h"
 using namespace std;
-using json = nlohmann::json;
 namespace fs = std::experimental::filesystem;
+namespace rj = rapidjson;
 
 // Generate building data from input directory, and save it to data directory
 void Building::generate(fs::path inputDir, fs::path satelliteDir, fs::path dataDir,
@@ -130,17 +133,18 @@ void Building::genReadMetadata(fs::path inputClusterDir) {
 	fs::path inputMetaPath = inputClusterDir /
 		("building_cluster_" + cluster + "__Metadata.json");
 	ifstream inputMetaFile(inputMetaPath);
-	json metadata;
-	inputMetaFile >> metadata;
+	rj::IStreamWrapper isw(inputMetaFile);
+	rj::Document metadata;
+	metadata.ParseStream(isw);
 
 	// Get EPSG code
-	string epsgStr = metadata.at("_items").at("spatial_reference").at("crs").at("data").at("init");
+	string epsgStr = metadata["_items"]["spatial_reference"]["crs"]["data"]["init"].GetString();
 	epsgCode = stoi(epsgStr.substr(5));
 
 	// Get origin
-	origin.x = metadata.at("_items").at("spatial_reference").at("affine").at(0);
-	origin.y = metadata.at("_items").at("spatial_reference").at("affine").at(3);
-	origin.z = metadata.at("_items").at("z_origin");
+	origin.x = metadata["_items"]["spatial_reference"]["affine"][0].GetFloat();
+	origin.y = metadata["_items"]["spatial_reference"]["affine"][3].GetFloat();
+	origin.z = metadata["_items"]["z_origin"].GetFloat();
 }
 
 void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats) {
@@ -644,67 +648,92 @@ void Building::genWriteData(fs::path dataDir) {
 
 
 	// Create output metadata
-	json meta;
-	meta["region"] = region;
-	meta["cluster"] = cluster;
-	meta["model"] = model;
-	meta["epsgCode"] = epsgCode;
-	meta["origin"][0] = origin.x;
-	meta["origin"][1] = origin.y;
-	meta["origin"][2] = origin.z;
-	meta["minBB"][0] = minBB.x;
-	meta["minBB"][1] = minBB.y;
-	meta["minBB"][2] = minBB.z;
-	meta["maxBB"][0] = maxBB.x;
-	meta["maxBB"][1] = maxBB.y;
-	meta["maxBB"][2] = maxBB.z;
-	meta["atlasSize"][0] = atlasSize.x;
-	meta["atlasSize"][1] = atlasSize.y;
+	rj::Document meta;
+	meta.SetObject();
+	auto& alloc = meta.GetAllocator();
+	meta.AddMember("region", rj::StringRef(region.c_str()), alloc);
+	meta.AddMember("cluster", rj::StringRef(cluster.c_str()), alloc);
+	meta.AddMember("model", rj::StringRef(model.c_str()), alloc);
+	meta.AddMember("epsgCode", rj::Value().SetUint(epsgCode), alloc);
+	meta.AddMember("origin", rj::Value().SetArray(), alloc);
+	meta["origin"].PushBack(origin.x, alloc);
+	meta["origin"].PushBack(origin.y, alloc);
+	meta["origin"].PushBack(origin.z, alloc);
+	meta.AddMember("minBB", rj::Value().SetArray(), alloc);
+	meta["minBB"].PushBack(minBB.x, alloc);
+	meta["minBB"].PushBack(minBB.y, alloc);
+	meta["minBB"].PushBack(minBB.z, alloc);
+	meta.AddMember("maxBB", rj::Value().SetArray(), alloc);
+	meta["maxBB"].PushBack(maxBB.x, alloc);
+	meta["maxBB"].PushBack(maxBB.y, alloc);
+	meta["maxBB"].PushBack(maxBB.z, alloc);
+	meta.AddMember("atlasSize", rj::Value().SetArray(), alloc);
+	meta["atlasSize"].PushBack(atlasSize.x, alloc);
+	meta["atlasSize"].PushBack(atlasSize.y, alloc);
 
 	// Satellite info
+	meta.AddMember("satInfo", rj::Value().SetArray(), alloc);
 	for (auto& si : satInfo) {
-		json satInfoMeta;
-		satInfoMeta["name"] = si.second.name;
-		satInfoMeta["roi"][0] = si.second.roi.x;
-		satInfoMeta["roi"][1] = si.second.roi.y;
-		satInfoMeta["roi"][2] = si.second.roi.width;
-		satInfoMeta["roi"][3] = si.second.roi.height;
-		satInfoMeta["dir"][0] = si.second.dir.x;
-		satInfoMeta["dir"][1] = si.second.dir.y;
-		satInfoMeta["dir"][2] = si.second.dir.z;
-		satInfoMeta["sun"][0] = si.second.sun.x;
-		satInfoMeta["sun"][1] = si.second.sun.y;
-		satInfoMeta["sun"][2] = si.second.sun.z;
-		meta["satInfo"].push_back(satInfoMeta);
+		rj::Value satInfoMeta;
+		satInfoMeta.SetObject();
+
+		satInfoMeta.AddMember("name", rj::StringRef(si.second.name.c_str()), alloc);
+		satInfoMeta.AddMember("roi", rj::Value().SetArray(), alloc);
+		satInfoMeta["roi"].PushBack(si.second.roi.x, alloc);
+		satInfoMeta["roi"].PushBack(si.second.roi.y, alloc);
+		satInfoMeta["roi"].PushBack(si.second.roi.width, alloc);
+		satInfoMeta["roi"].PushBack(si.second.roi.height, alloc);
+		satInfoMeta.AddMember("dir", rj::Value().SetArray(), alloc);
+		satInfoMeta["dir"].PushBack(si.second.dir.x, alloc);
+		satInfoMeta["dir"].PushBack(si.second.dir.y, alloc);
+		satInfoMeta["dir"].PushBack(si.second.dir.z, alloc);
+		satInfoMeta.AddMember("sun", rj::Value().SetArray(), alloc);
+		satInfoMeta["sun"].PushBack(si.second.sun.x, alloc);
+		satInfoMeta["sun"].PushBack(si.second.sun.y, alloc);
+		satInfoMeta["sun"].PushBack(si.second.sun.z, alloc);
+
+		meta["satInfo"].PushBack(satInfoMeta.Move(), alloc);
 	}
 
 	// Facade info
+	meta.AddMember("facadeInfo", rj::Value().SetArray(), alloc);
 	for (auto& fi : facadeInfo) {
-		json facadeInfoMeta;
+		rj::Value facadeInfoMeta;
+		facadeInfoMeta.SetObject();
+
+		facadeInfoMeta.AddMember("faceIDs", rj::Value().SetArray(), alloc);
 		for (auto f : fi.faceIDs)
-			facadeInfoMeta["faceIDs"].push_back(f);
-		for (auto s : fi.inSats)
-			facadeInfoMeta["inSats"].push_back(s);
-		facadeInfoMeta["normal"][0] = fi.normal.x;
-		facadeInfoMeta["normal"][1] = fi.normal.y;
-		facadeInfoMeta["normal"][2] = fi.normal.z;
-		facadeInfoMeta["size"][0] = fi.size.x;
-		facadeInfoMeta["size"][1] = fi.size.y;
-		facadeInfoMeta["atlasBB"][0] = fi.atlasBB.x;
-		facadeInfoMeta["atlasBB"][1] = fi.atlasBB.y;
-		facadeInfoMeta["atlasBB"][2] = fi.atlasBB.width;
-		facadeInfoMeta["atlasBB"][3] = fi.atlasBB.height;
-		facadeInfoMeta["height"] = fi.height;
-		facadeInfoMeta["ground"] = fi.ground;
-		facadeInfoMeta["roof"] = fi.roof;
-		meta["facadeInfo"].push_back(facadeInfoMeta);
+			facadeInfoMeta["faceIDs"].PushBack(f, alloc);
+		facadeInfoMeta.AddMember("inSats", rj::Value().SetArray(), alloc);
+		for (auto& s : fi.inSats)
+			facadeInfoMeta["inSats"].PushBack(rj::StringRef(s.c_str()), alloc);
+		facadeInfoMeta.AddMember("normal", rj::Value().SetArray(), alloc);
+		facadeInfoMeta["normal"].PushBack(fi.normal.x, alloc);
+		facadeInfoMeta["normal"].PushBack(fi.normal.y, alloc);
+		facadeInfoMeta["normal"].PushBack(fi.normal.z, alloc);
+		facadeInfoMeta.AddMember("size", rj::Value().SetArray(), alloc);
+		facadeInfoMeta["size"].PushBack(fi.size.x, alloc);
+		facadeInfoMeta["size"].PushBack(fi.size.y, alloc);
+		facadeInfoMeta.AddMember("atlasBB", rj::Value().SetArray(), alloc);
+		facadeInfoMeta["atlasBB"].PushBack(fi.atlasBB.x, alloc);
+		facadeInfoMeta["atlasBB"].PushBack(fi.atlasBB.y, alloc);
+		facadeInfoMeta["atlasBB"].PushBack(fi.atlasBB.width, alloc);
+		facadeInfoMeta["atlasBB"].PushBack(fi.atlasBB.height, alloc);
+		facadeInfoMeta.AddMember("height", rj::Value().SetFloat(fi.height), alloc);
+		facadeInfoMeta.AddMember("ground", rj::Value().SetBool(fi.ground), alloc);
+		facadeInfoMeta.AddMember("roof", rj::Value().SetBool(fi.roof), alloc);
+
+		meta["facadeInfo"].PushBack(facadeInfoMeta.Move(), alloc);
 	}
 
 	// Write metadata to file
 	fs::path metaPath = objPath;
 	metaPath.replace_extension(".json");
 	ofstream metaFile(metaPath);
-	metaFile << meta << endl;
+	rj::OStreamWrapper osw(metaFile);
+	rj::PrettyWriter<rj::OStreamWrapper> writer(osw);
+	meta.Accept(writer);
+	metaFile << endl;
 }
 
 // Save cropped versions of all satellite images and masks
@@ -1165,86 +1194,87 @@ void Building::loadGeometry(fs::path objPath) {
 
 void Building::loadMetadata(fs::path metaPath) {
 	// Read metadata from JSON file
-	json meta;
 	ifstream metaFile(metaPath);
-	metaFile >> meta;
+	rj::IStreamWrapper isw(metaFile);
+	rj::Document meta;
+	meta.ParseStream(isw);
 
 	// Region, cluster, model
-	region = meta.at("region");
-	cluster = meta.at("cluster");
-	model = meta.at("model");
+	region = meta["region"].GetString();
+	cluster = meta["cluster"].GetString();
+	model = meta["model"].GetString();
 	// EPSG code
-	epsgCode = meta.at("epsgCode");
+	epsgCode = meta["epsgCode"].GetUint();
 	// Origin in UTM
-	origin.x = meta.at("origin").at(0);
-	origin.y = meta.at("origin").at(1);
-	origin.z = meta.at("origin").at(2);
+	origin.x = meta["origin"][0].GetFloat();
+	origin.y = meta["origin"][1].GetFloat();
+	origin.z = meta["origin"][2].GetFloat();
 	// Minimum bounding box
-	minBB.x = meta.at("minBB").at(0);
-	minBB.y = meta.at("minBB").at(1);
-	minBB.z = meta.at("minBB").at(2);
+	minBB.x = meta["minBB"][0].GetFloat();
+	minBB.y = meta["minBB"][1].GetFloat();
+	minBB.z = meta["minBB"][2].GetFloat();
 	// Maximum bounding box
-	maxBB.x = meta.at("maxBB").at(0);
-	maxBB.y = meta.at("maxBB").at(1);
-	maxBB.z = meta.at("maxBB").at(2);
+	maxBB.x = meta["maxBB"][0].GetFloat();
+	maxBB.y = meta["maxBB"][1].GetFloat();
+	maxBB.z = meta["maxBB"][2].GetFloat();
 	// Size of atlas texture
-	atlasSize.x = meta.at("atlasSize").at(0);
-	atlasSize.y = meta.at("atlasSize").at(1);
+	atlasSize.x = meta["atlasSize"][0].GetUint();
+	atlasSize.y = meta["atlasSize"][1].GetUint();
 
 	// Satellite info
-	for (size_t s = 0; s < meta.at("satInfo").size(); s++) {
+	for (rj::SizeType s = 0; s < meta["satInfo"].Size(); s++) {
 		SatInfo si;
 
 		// Satellite name
-		si.name = meta.at("satInfo").at(s).at("name");
+		si.name = meta["satInfo"][s]["name"].GetString();
 		// Region of interest (px, UL origin)
-		si.roi.x = meta.at("satInfo").at(s).at("roi").at(0);
-		si.roi.y = meta.at("satInfo").at(s).at("roi").at(1);
-		si.roi.width = meta.at("satInfo").at(s).at("roi").at(2);
-		si.roi.height = meta.at("satInfo").at(s).at("roi").at(3);
+		si.roi.x = meta["satInfo"][s]["roi"][0].GetInt();
+		si.roi.y = meta["satInfo"][s]["roi"][1].GetInt();
+		si.roi.width = meta["satInfo"][s]["roi"][2].GetInt();
+		si.roi.height = meta["satInfo"][s]["roi"][3].GetInt();
 		// Satellite facing direction (UTM)
-		si.dir.x = meta.at("satInfo").at(s).at("dir").at(0);
-		si.dir.y = meta.at("satInfo").at(s).at("dir").at(1);
-		si.dir.z = meta.at("satInfo").at(s).at("dir").at(2);
+		si.dir.x = meta["satInfo"][s]["dir"][0].GetFloat();
+		si.dir.y = meta["satInfo"][s]["dir"][1].GetFloat();
+		si.dir.z = meta["satInfo"][s]["dir"][2].GetFloat();
 		// Direction towards the sun (UTM)
-		si.sun.x = meta.at("satInfo").at(s).at("sun").at(0);
-		si.sun.y = meta.at("satInfo").at(s).at("sun").at(1);
-		si.sun.z = meta.at("satInfo").at(s).at("sun").at(2);
+		si.sun.x = meta["satInfo"][s]["sun"][0].GetFloat();
+		si.sun.y = meta["satInfo"][s]["sun"][1].GetFloat();
+		si.sun.z = meta["satInfo"][s]["sun"][2].GetFloat();
 
 		// Add to satellite info
 		satInfo[si.name] = si;
 	}
 
 	// Facade info
-	for (size_t f = 0; f < meta.at("facadeInfo").size(); f++) {
+	for (size_t f = 0; f < meta["facadeInfo"].Size(); f++) {
 		FacadeInfo fi;
 
 		// List of face IDs in this facade
-		for (size_t i = 0; i < meta.at("facadeInfo").at(f).at("faceIDs").size(); i++) {
-			fi.faceIDs.push_back(meta.at("facadeInfo").at(f).at("faceIDs").at(i));
+		for (size_t i = 0; i < meta["facadeInfo"][f]["faceIDs"].Size(); i++) {
+			fi.faceIDs.push_back(meta["facadeInfo"][f]["faceIDs"][i].GetUint());
 		}
 		// List of satellites observing this facade
-		for (size_t i = 0; i < meta.at("facadeInfo").at(f).at("inSats").size(); i++) {
-			fi.inSats.insert(meta.at("facadeInfo").at(f).at("inSats").at(i).get<string>());
+		for (size_t i = 0; i < meta["facadeInfo"][f]["inSats"].Size(); i++) {
+			fi.inSats.insert(meta["facadeInfo"][f]["inSats"][i].GetString());
 		}
 		// Normalized facing direction (UTM)
-		fi.normal.x = meta.at("facadeInfo").at(f).at("normal").at(0);
-		fi.normal.y = meta.at("facadeInfo").at(f).at("normal").at(1);
-		fi.normal.z = meta.at("facadeInfo").at(f).at("normal").at(2);
+		fi.normal.x = meta["facadeInfo"][f]["normal"][0].GetFloat();
+		fi.normal.y = meta["facadeInfo"][f]["normal"][1].GetFloat();
+		fi.normal.z = meta["facadeInfo"][f]["normal"][2].GetFloat();
 		// Width, height of rectified facade (px)
-		fi.size.x = meta.at("facadeInfo").at(f).at("size").at(0);
-		fi.size.y = meta.at("facadeInfo").at(f).at("size").at(1);
+		fi.size.x = meta["facadeInfo"][f]["size"][0].GetInt();
+		fi.size.y = meta["facadeInfo"][f]["size"][1].GetInt();
 		// Bounding rect of UV coords in atlas (UV, LL origin)
-		fi.atlasBB.x = meta.at("facadeInfo").at(f).at("atlasBB").at(0);
-		fi.atlasBB.y = meta.at("facadeInfo").at(f).at("atlasBB").at(1);
-		fi.atlasBB.width = meta.at("facadeInfo").at(f).at("atlasBB").at(2);
-		fi.atlasBB.height = meta.at("facadeInfo").at(f).at("atlasBB").at(3);
+		fi.atlasBB.x = meta["facadeInfo"][f]["atlasBB"][0].GetFloat();
+		fi.atlasBB.y = meta["facadeInfo"][f]["atlasBB"][1].GetFloat();
+		fi.atlasBB.width = meta["facadeInfo"][f]["atlasBB"][2].GetFloat();
+		fi.atlasBB.height = meta["facadeInfo"][f]["atlasBB"][3].GetFloat();
 		// Height of the facade (UTM)
-		fi.height = meta.at("facadeInfo").at(f).at("height");
+		fi.height = meta["facadeInfo"][f]["height"].GetFloat();
 		// Whether facade touches the ground
-		fi.ground = meta.at("facadeInfo").at(f).at("ground");
+		fi.ground = meta["facadeInfo"][f]["ground"].GetBool();
 		// Whether this is a roof facade
-		fi.roof = meta.at("facadeInfo").at(f).at("roof");
+		fi.roof = meta["facadeInfo"][f]["roof"].GetBool();
 
 		// Add to facade info
 		facadeInfo.push_back(fi);
