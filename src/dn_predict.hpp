@@ -4,8 +4,9 @@
 #include <string>
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include <rapidjson/document.h>
 
-std::vector<double> dn_predict(cv::Mat src, std::string network_path);
-cv::Mat generateFacadeSynImage(std::vector<double> params);
+rapidjson::Document dn_predict(cv::Mat image, rapidjson::Document meta, std::string network_path);
+//cv::Mat generateFacadeSynImage(std::vector<double> params);
 
 #endif

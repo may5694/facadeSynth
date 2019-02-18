@@ -13,7 +13,7 @@ int const height = 224; // DNN image height
 int const width = 224; // DNN image width
 int const num_paras = 4; // number of paras
 
-std::vector<double> dn_predict(cv::Mat src, std::string network_path) {
+rapidjson::Document dn_predict(cv::Mat image, rapidjson::Document meta, std::string network_path) {
 
 	// Deserialize the ScriptModule from a file using torch::jit::load().
 	std::shared_ptr<torch::jit::script::Module> module = torch::jit::load(network_path);
@@ -25,9 +25,9 @@ std::vector<double> dn_predict(cv::Mat src, std::string network_path) {
 
 	cv::Mat dst_ehist, dst_classify;
 	// Convert to grayscale
-	cvtColor(src, src, CV_BGR2GRAY);
+	cvtColor(image, image, CV_BGR2GRAY);
 	// Apply Histogram Equalization
-	equalizeHist(src, dst_ehist);
+	equalizeHist(image, dst_ehist);
 	// threshold classification
 	int threshold = 90;
 	cv::threshold(dst_ehist, dst_classify, threshold, max_BINARY_value, cv::THRESH_BINARY);
@@ -69,9 +69,10 @@ std::vector<double> dn_predict(cv::Mat src, std::string network_path) {
 		paras.push_back(out_tensor.slice(1, i, i+1).item<float>());
 	}
 
-	return paras;
+	return meta;
 }
 
+/*
 cv::Mat generateFacadeSynImage(std::vector<double> params) {
 
 	// predict img by DNN
@@ -136,3 +137,4 @@ cv::Mat generateFacadeSynImage(std::vector<double> params) {
 	}
 	return result;
 }
+*/
