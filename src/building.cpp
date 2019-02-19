@@ -138,14 +138,17 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	if (!fs::exists(outDir))
 		fs::create_directories(outDir);
 	fs::path imageDir = outDir / "image";
-	if (!fs::exists(imageDir))
-		fs::create_directory(imageDir);
+	if (fs::exists(imageDir))
+		fs::remove_all(imageDir);
+	fs::create_directory(imageDir);
 	fs::path histeqDir = outDir / "histeq";
-	if (!fs::exists(histeqDir))
-		fs::create_directory(histeqDir);
+	if (fs::exists(histeqDir))
+		fs::remove_all(histeqDir);
+	fs::create_directory(histeqDir);
 	fs::path metaDir = outDir / "metadata";
-	if (!fs::exists(metaDir))
-		fs::create_directory(metaDir);
+	if (fs::exists(metaDir))
+		fs::remove_all(metaDir);
+	fs::create_directory(metaDir);
 
 	int clusterInt = stoi(cluster);
 

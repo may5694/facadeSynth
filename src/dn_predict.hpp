@@ -7,6 +7,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include "rapidjson/document.h"
 #include "rapidjson/writer.h"
+#include "rapidjson/prettywriter.h"
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/filereadstream.h"
 #include "rapidjson/filewritestream.h"

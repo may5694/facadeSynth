@@ -73,7 +73,7 @@ void dn_predict(std::string metajson, std::string modeljson) {
 
 		char writeBuffer[10240];
 		rapidjson::FileWriteStream os(fp, writeBuffer, sizeof(writeBuffer));
-		rapidjson::Writer<rapidjson::FileWriteStream> writer(os);
+		rapidjson::PrettyWriter<rapidjson::FileWriteStream> writer(os);
 		doc.Accept(writer);
 		fclose(fp);
 		return;
@@ -405,7 +405,7 @@ void dn_predict(std::string metajson, std::string modeljson) {
 	}
 	char writeBuffer[10240];
 	rapidjson::FileWriteStream os(fp, writeBuffer, sizeof(writeBuffer));
-	rapidjson::Writer<rapidjson::FileWriteStream> writer(os);
+	rapidjson::PrettyWriter<rapidjson::FileWriteStream> writer(os);
 	doc.Accept(writer);
 	fclose(fp);
 }
