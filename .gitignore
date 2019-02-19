@@ -4,4 +4,4 @@ output/
 facadeSynth
 *.o
 *.swp
-*.json
+config.json
