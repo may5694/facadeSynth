@@ -104,8 +104,16 @@ int main(int argc, char** argv) {
 					b.load(opts.dataDir, opts.region, cidStr, opts.model);
 				}
 
-				// TODO: score, predict, synthesize
+				// Score all facades and return metadata
+				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
 
+				// Predict facade structure using DN
+/*				for (auto& fi : facadeMeta) {
+					dn_predict(fi.second.string());
+
+					// TODO: synthesize
+				}
+*/
 			} catch (const exception& e) {
 				cout << "Failed to process cluster " << cidStr << ": " << e.what() << endl;
 				continue;

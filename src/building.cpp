@@ -128,6 +128,207 @@ void Building::clear() {
 	facadeInfo.clear();
 }
 
+// Compute the best score of each facade and return metadata
+map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
+	// Map facade IDs to output metadata paths
+	map<size_t, fs::path> facadeMap;
+
+	// Create output directories
+	fs::path outDir = outputDir / region / cluster / model;
+	if (!fs::exists(outDir))
+		fs::create_directories(outDir);
+	fs::path imageDir = outDir / "image";
+	if (!fs::exists(imageDir))
+		fs::create_directory(imageDir);
+	fs::path histeqDir = outDir / "histeq";
+	if (!fs::exists(histeqDir))
+		fs::create_directory(histeqDir);
+	fs::path metaDir = outDir / "metadata";
+	if (!fs::exists(metaDir))
+		fs::create_directory(metaDir);
+
+	int clusterInt = stoi(cluster);
+
+	// Loop over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		const FacadeInfo& finfo = facadeInfo[fi];
+		string fiStr; {
+			stringstream ss; ss << setw(4) << setfill('0') << fi;
+			fiStr = ss.str();
+		}
+
+		// Skip roofs
+		if (finfo.roof) continue;
+
+		// Get projected area for each satellite
+		map<string, float> areas;
+		float maxArea = 0.0;
+		for (auto& si : finfo.inSats) {
+			float area = 0.0;
+			// Iterate over each triangle
+			for (auto f : finfo.faceIDs) {
+				// Get vertices
+				glm::vec2 va = satTCBufs[si][indexBuf[3 * f + 0]];
+				va = glm::vec2(util::SpatXform::uv2px(glm::vec3(va, 0.0), satInfo[si].roi));
+				glm::vec2 vb = satTCBufs[si][indexBuf[3 * f + 1]];
+				vb = glm::vec2(util::SpatXform::uv2px(glm::vec3(vb, 0.0), satInfo[si].roi));
+				glm::vec2 vc = satTCBufs[si][indexBuf[3 * f + 2]];
+				vc = glm::vec2(util::SpatXform::uv2px(glm::vec3(vc, 0.0), satInfo[si].roi));
+				// Calc area
+				glm::vec2 ba = vb - va;
+				glm::vec2 ca = vc - va;
+				area += abs(ba.x * ca.y - ba.y * ca.x) / 2.0;
+			}
+			if (area > maxArea) maxArea = area;
+			areas[si] = area;
+		}
+		// Skip if area is too small
+		if (maxArea < 1e-4) continue;
+
+		// Keep track of best scoring facade
+		float maxScore = 0.0;
+		string maxScoreIdx;
+		cv::Mat maxScoreImage;
+		// Get score for each satellite observation of this facade
+		for (auto& si : finfo.inSats) {
+
+			// Load RGBA texture
+			fs::path bgraPath = modelDir / "facade" / fiStr / (si + "_ps.png");
+			cv::Mat bgraImage = cv::imread(bgraPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			if (!bgraImage.data) {
+				cout << "Facade " << fi << " texture " << bgraPath.filename() << " missing!" << endl;
+				cout << bgraPath << endl;
+				continue;
+			}
+			bgraImage.convertTo(bgraImage, CV_32F, 1.0 / 255.0);
+
+			// Separate into BGR and A
+			cv::Mat bgrImage(bgraImage.size(), CV_32FC3), aImage(bgraImage.size(), CV_32FC1);
+			cv::mixChannels(vector<cv::Mat>{ bgraImage }, vector<cv::Mat>{ bgrImage, aImage },
+				{ 0, 0, 1, 1, 2, 2, 3, 3 });
+			cv::Mat aMask = (aImage > 0.5);
+
+			// Load cluster mask
+			fs::path clusterMaskPath = modelDir / "facade" / fiStr / (si + "_cid.png");
+			cv::Mat clusterMask = cv::imread(clusterMaskPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			cv::Mat unOcc;
+			if (!clusterMask.data) {
+				cout << "Cluster mask " << clusterMaskPath.filename() << " missing!" << endl;
+				unOcc = cv::Mat::ones(bgraImage.size(), CV_32FC1);
+			} else {
+				unOcc = (clusterMask == clusterInt) | (clusterMask == 0);
+				unOcc.convertTo(unOcc, CV_32F, 1.0 / 255.0);
+			}
+
+			// Find the largest inset rectangle
+			// TODO...
+
+			// Convert to HSV space
+			cv::Mat hsvImage;
+			cv::cvtColor(bgrImage, hsvImage, cv::COLOR_BGR2HSV);
+			cv::Mat hImage(hsvImage.size(), CV_32FC1), vImage(hsvImage.size(), CV_32FC1);
+			cv::mixChannels(vector<cv::Mat>{ hsvImage }, vector<cv::Mat>{ hImage, vImage },
+				{ 0, 0, 2, 1 });
+
+			cv::Size ks(7, 7);
+			// Calculate shadows
+			cv::Mat hShadow = hImage.clone();
+			hShadow.forEach<float>([](float& p, const int* position) -> void {
+				p = pow(cos((p - 0.6) * 2.0 * M_PI) * 0.5 + 0.5, 200.0);
+			});
+			cv::boxFilter(hShadow, hShadow, -1, ks);
+			cv::Mat vShadow = vImage.clone();
+			vShadow.forEach<float>([](float& p, const int* position) -> void {
+				p = pow(max(0.25 - p, 0.0) / 0.25, 0.5);
+			});
+			cv::boxFilter(vShadow, vShadow, -1, ks);
+			cv::Mat inShadow = hShadow.mul(vShadow).mul(aImage);
+
+			// Calculate brightness
+			cv::Mat vBright = vImage.clone();
+			vBright.forEach<float>([](float& p, const int* position) -> void {
+				p = min(p + 0.5, 1.0);
+			});
+			cv::boxFilter(vBright, vBright, -1, ks);
+
+			// Calculate score
+			float w1 = 0.35;		// Shadow
+			float w2 = 0.2;			// Brightness
+			float w3 = 0.45;		// Area
+			cv::Mat score = unOcc.mul(aImage).mul(
+				w1 * inShadow + w2 * vBright + w3 * areas[si] / maxArea);
+			float avgScore = cv::mean(score, aMask)[0];
+			// Find max score
+			if (avgScore > maxScore) {
+				maxScore = avgScore;
+				maxScoreIdx = si;
+				maxScoreImage = bgrImage;
+			}
+		}
+
+		// Save highest scoring facade
+		string imageName; {
+			stringstream ss;
+			ss << cluster << "_" << fixed << setprecision(4) << maxScore
+				<< "_" << fiStr << "_" << maxScoreIdx << ".png";
+			imageName = ss.str();
+		}
+		fs::path imagePath = imageDir / imageName;
+		maxScoreImage.convertTo(maxScoreImage, CV_8U, 255.0);
+		cv::imwrite(imagePath.string(), maxScoreImage);
+
+		// Generate hist-equalized version
+		cv::Mat hsvImage;
+		cv::cvtColor(maxScoreImage, hsvImage, cv::COLOR_BGR2HSV);
+		cv::Mat vHisteq(maxScoreImage.size(), CV_8UC1);
+		cv::mixChannels(vector<cv::Mat>{ hsvImage }, vector<cv::Mat>{ vHisteq }, { 2, 0 });
+		cv::equalizeHist(vHisteq, vHisteq);
+		cv::mixChannels(vector<cv::Mat>{ vHisteq }, vector<cv::Mat>{ hsvImage }, { 0, 2 });
+		cv::Mat histeqImage;
+		cv::cvtColor(hsvImage, histeqImage, cv::COLOR_HSV2BGR);
+		// Save histeq version
+		fs::path histeqPath = histeqDir / imageName;
+		cv::imwrite(histeqPath.string(), histeqImage);
+
+		// Create JSON metadata
+		rj::Document meta;
+		meta.SetObject();
+		auto& alloc = meta.GetAllocator();
+		meta.AddMember("region", rj::StringRef(region.c_str()), alloc);
+		meta.AddMember("cluster", rj::StringRef(cluster.c_str()), alloc);
+		meta.AddMember("model", rj::StringRef(model.c_str()), alloc);
+		meta.AddMember("facade", rj::Value().SetUint(fi), alloc);
+		meta.AddMember("satellite", rj::StringRef(maxScoreIdx.c_str()), alloc);
+		meta.AddMember("crop", rj::Value().SetArray(), alloc);
+		meta["crop"].PushBack(0, alloc);
+		meta["crop"].PushBack(0, alloc);
+		meta["crop"].PushBack(maxScoreImage.cols, alloc);
+		meta["crop"].PushBack(maxScoreImage.rows, alloc);
+		meta.AddMember("size", rj::Value().SetArray(), alloc);
+		meta["size"].PushBack(maxScoreImage.cols * finfo.height / finfo.size.y, alloc);
+		meta["size"].PushBack(maxScoreImage.rows * finfo.height / finfo.size.y, alloc);
+		meta.AddMember("ground", rj::Value().SetBool(finfo.ground), alloc);
+		meta.AddMember("score", rj::Value().SetFloat(maxScore), alloc);
+		meta.AddMember("imagename", rj::Value().SetString(imagePath.string().c_str(), alloc).Move(), alloc);
+		// Write to disk
+		fs::path metaPath; {
+			stringstream ss;
+			ss << cluster << "_" << fiStr << ".json";
+			metaPath = metaDir / ss.str();
+		}
+		ofstream metaFile(metaPath);
+		rj::OStreamWrapper osw(metaFile);
+		rj::PrettyWriter<rj::OStreamWrapper> writer(osw);
+		meta.Accept(writer);
+		metaFile << endl;
+
+		// Store facade meta path
+		facadeMap[fi] = metaPath;
+	}
+
+	return facadeMap;
+}
+
 void Building::genReadMetadata(fs::path inputClusterDir) {
 	// Read input metadata file
 	fs::path inputMetaPath = inputClusterDir /

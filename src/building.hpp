@@ -23,6 +23,9 @@ public:
 	// Return building to empty state
 	void clear();
 
+	// Score all facades and save metadata for each
+	std::map<size_t, fs::path> scoreFacades(fs::path outputDir);
+
 	// Geometry accessors
 	const auto& getPosBuf() const { return posBuf; }
 	const auto& getNormBuf() const { return normBuf; }
