@@ -1,4 +1,5 @@
 #include "util.hpp"
+#include <stack>
 using namespace std;
 
 namespace util {
@@ -279,5 +280,58 @@ void Canvas::split(glm::uvec2 idx, glm::ivec2 llsz) {
 	}
 }
 
+// Returns the largest rectangle inscribed within regions of all non-zero pixels
+cv::Rect findLargestRectangle(cv::Mat image) {
+	assert(image.channels() == 1);
+	cv::Mat mask = (image > 0) / 255;
+	mask.convertTo(mask, CV_16S);
+
+	// Get the largest area rectangle under a histogram
+	auto maxHist = [](cv::Mat hist) -> cv::Rect {
+		// Append -1 to both ends
+		cv::copyMakeBorder(hist, hist, 0, 0, 1, 1, cv::BORDER_CONSTANT, cv::Scalar::all(-1));
+		cv::Rect maxRect(-1, -1, 0, 0);
+
+		// Initialize stack to first element
+		stack<int> colStack;
+		colStack.push(0);
+
+		// Iterate over columns
+		for (int c = 0; c < hist.cols; c++) {
+			// Ensure stack is only increasing
+			while (hist.at<int16_t>(c) < hist.at<int16_t>(colStack.top())) {
+				// Pop larger element
+				int h = hist.at<int16_t>(colStack.top()); colStack.pop();
+				// Get largest rect at popped height using nearest smaller element on both sides
+				cv::Rect rect(colStack.top(), 0, c - colStack.top() - 1, h);
+				// Update best rect
+				if (rect.area() > maxRect.area())
+					maxRect = rect;
+			}
+			// Push this column
+			colStack.push(c);
+		}
+		return maxRect;
+	};
+
+	cv::Rect maxRect(-1, -1, 0, 0);
+	cv::Mat height = cv::Mat::zeros(1, mask.cols, CV_16SC1);
+	for (int r = 0; r < mask.rows; r++) {
+		// Extract a single row
+		cv::Mat row = mask.row(r);
+		// Get height of unbroken non-zero values per column
+		height = (height + row);
+		height.setTo(0, row == 0);
+
+		// Get largest rectangle from this row up
+		cv::Rect rect = maxHist(height);
+		if (rect.area() > maxRect.area()) {
+			maxRect = rect;
+			maxRect.y = r - maxRect.height + 1;
+		}
+	}
+
+	return maxRect;
+}
 
 }

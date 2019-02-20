@@ -90,6 +90,9 @@ private:
 	void split(glm::uvec2 idx, glm::ivec2 llsz);
 };
 
+// Returns the largest rectangle inscribed within regions of all non-zero pixels
+cv::Rect findLargestRectangle(cv::Mat image);
+
 }
 
 #endif

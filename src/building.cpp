@@ -192,6 +192,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		float maxScore = 0.0;
 		string maxScoreIdx;
 		cv::Mat maxScoreImage;
+		cv::Rect maxScoreRect;
 		// Get score for each satellite observation of this facade
 		for (auto& si : finfo.inSats) {
 
@@ -211,6 +212,13 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 				{ 0, 0, 1, 1, 2, 2, 3, 3 });
 			cv::Mat aMask = (aImage > 0.5);
 
+			// Find the largest inscribed rectangle
+			cv::Rect inRect = util::findLargestRectangle(aMask);
+			bgraImage = bgraImage(inRect);
+			bgrImage = bgrImage(inRect);
+			aImage = aImage(inRect);
+			aMask = aMask(inRect);
+
 			// Load cluster mask
 			fs::path clusterMaskPath = modelDir / "facade" / fiStr / (si + "_cid.png");
 			cv::Mat clusterMask = cv::imread(clusterMaskPath.string(), CV_LOAD_IMAGE_UNCHANGED);
@@ -219,12 +227,10 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 				cout << "Cluster mask " << clusterMaskPath.filename() << " missing!" << endl;
 				unOcc = cv::Mat::ones(bgraImage.size(), CV_32FC1);
 			} else {
+				clusterMask = clusterMask(inRect);
 				unOcc = (clusterMask == clusterInt) | (clusterMask == 0);
 				unOcc.convertTo(unOcc, CV_32F, 1.0 / 255.0);
 			}
-
-			// Find the largest inset rectangle
-			// TODO...
 
 			// Convert to HSV space
 			cv::Mat hsvImage;
@@ -266,6 +272,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 				maxScore = avgScore;
 				maxScoreIdx = si;
 				maxScoreImage = bgrImage;
+				maxScoreRect = inRect;
 			}
 		}
 
@@ -303,13 +310,13 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		meta.AddMember("facade", rj::Value().SetUint(fi), alloc);
 		meta.AddMember("satellite", rj::StringRef(maxScoreIdx.c_str()), alloc);
 		meta.AddMember("crop", rj::Value().SetArray(), alloc);
-		meta["crop"].PushBack(0, alloc);
-		meta["crop"].PushBack(0, alloc);
-		meta["crop"].PushBack(maxScoreImage.cols, alloc);
-		meta["crop"].PushBack(maxScoreImage.rows, alloc);
+		meta["crop"].PushBack(maxScoreRect.x, alloc);
+		meta["crop"].PushBack(maxScoreRect.y, alloc);
+		meta["crop"].PushBack(maxScoreRect.width, alloc);
+		meta["crop"].PushBack(maxScoreRect.height, alloc);
 		meta.AddMember("size", rj::Value().SetArray(), alloc);
-		meta["size"].PushBack(maxScoreImage.cols * finfo.height / finfo.size.y, alloc);
-		meta["size"].PushBack(maxScoreImage.rows * finfo.height / finfo.size.y, alloc);
+		meta["size"].PushBack(maxScoreRect.width * finfo.height / finfo.size.y, alloc);
+		meta["size"].PushBack(maxScoreRect.height * finfo.height / finfo.size.y, alloc);
 		meta.AddMember("ground", rj::Value().SetBool(finfo.ground), alloc);
 		meta.AddMember("score", rj::Value().SetFloat(maxScore), alloc);
 		meta.AddMember("imagename", rj::Value().SetString(imagePath.string().c_str(), alloc).Move(), alloc);
