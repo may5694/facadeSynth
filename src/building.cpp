@@ -141,6 +141,10 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	if (fs::exists(imageDir))
 		fs::remove_all(imageDir);
 	fs::create_directory(imageDir);
+	fs::path chipDir = outDir / "chip";
+	if (fs::exists(chipDir))
+		fs::remove_all(chipDir);
+	fs::create_directory(chipDir);
 	fs::path histeqDir = outDir / "histeq";
 	if (fs::exists(histeqDir))
 		fs::remove_all(histeqDir);
@@ -283,9 +287,9 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 				<< "_" << fiStr << "_" << maxScoreIdx << ".png";
 			imageName = ss.str();
 		}
-		fs::path imagePath = imageDir / imageName;
+		fs::path chipPath = chipDir / imageName;
 		maxScoreImage.convertTo(maxScoreImage, CV_8U, 255.0);
-		cv::imwrite(imagePath.string(), maxScoreImage);
+		cv::imwrite(chipPath.string(), maxScoreImage);
 
 		// Generate hist-equalized version
 		cv::Mat hsvImage;
@@ -299,6 +303,11 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		// Save histeq version
 		fs::path histeqPath = histeqDir / imageName;
 		cv::imwrite(histeqPath.string(), histeqImage);
+
+		// Copy original to output image dir
+		fs::path bestOrigPath = modelDir / "facade" / fiStr / (maxScoreIdx + "_ps.png");
+		fs::path bestCopyPath = imageDir / (cluster + "_" + fiStr + ".png");
+		fs::copy_file(bestOrigPath, bestCopyPath);
 
 		// Create JSON metadata
 		rj::Document meta;
@@ -320,7 +329,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		meta.AddMember("ground", rj::Value().SetBool(finfo.ground
 			&& (maxScoreRect.y + maxScoreRect.height == finfo.size.y)), alloc);
 		meta.AddMember("score", rj::Value().SetFloat(maxScore), alloc);
-		meta.AddMember("imagename", rj::Value().SetString(imagePath.string().c_str(), alloc).Move(), alloc);
+		meta.AddMember("imagename", rj::Value().SetString(chipPath.string().c_str(), alloc).Move(), alloc);
 		// Write to disk
 		fs::path metaPath; {
 			stringstream ss;
@@ -338,6 +347,149 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	}
 
 	return facadeMap;
+}
+
+// Synthesize facades based on network output parameters
+void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
+	// Create output directory
+	fs::path outDir = outputDir / region / cluster / model;
+	fs::path synthDir = outDir / "synth";
+	if (fs::exists(synthDir))
+		fs::remove_all(synthDir);
+	fs::create_directory(synthDir);
+
+	// Iterate over all facades
+	for (auto fi : facades) {
+		string fiStr; {
+			stringstream ss;
+			ss << setw(4) << setfill('0') << fi.first;
+			fiStr = ss.str();
+		}
+
+		// Read metadata
+		ifstream metaFile(fi.second);
+		rj::IStreamWrapper isw(metaFile);
+		rj::Document meta;
+		meta.ParseStream(isw);
+
+		// Store values from metadata
+		string si = meta["satellite"].GetString();
+		bool valid = meta["valid"].GetBool();
+		cv::Scalar bg_color;
+		bg_color[0] = meta["bg_color"][0].GetDouble();
+		bg_color[1] = meta["bg_color"][1].GetDouble();
+		bg_color[2] = meta["bg_color"][2].GetDouble();
+		bg_color[3] = 255;
+		cv::Scalar window_color;
+		if (valid) {
+			window_color[0] = meta["window_color"][0].GetDouble();
+			window_color[1] = meta["window_color"][1].GetDouble();
+			window_color[2] = meta["window_color"][2].GetDouble();
+			window_color[3] = 255;
+		}
+
+		// Load facade image
+		fs::path bgraPath = modelDir / "facade" / fiStr / (si + "_ps.png");
+		cv::Mat bgraImage = cv::imread(bgraPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		if (!bgraImage.data) {
+			cout << "Facade " << fiStr << " texture " << bgraPath.filename() << " missing!" << endl;
+			cout << bgraPath << endl;
+			continue;
+		}
+		// Extract alpha channel
+		cv::Mat aImage(bgraImage.size(), CV_8UC1);
+		cv::mixChannels(vector<cv::Mat>{ bgraImage }, vector<cv::Mat>{ aImage }, { 3, 0 });
+
+		// Create synthetic facade texture
+		cv::Mat synthImage = cv::Mat::zeros(aImage.size(), CV_8UC4);
+		synthImage.setTo(bg_color, aImage);
+
+		if (valid) {
+			// Read window parameters
+			int rows = meta["paras"]["rows"].GetInt();
+			int cols = meta["paras"]["cols"].GetInt();
+			float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
+			float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
+
+			// Separate into sections of equal vertical height
+			vector<cv::Rect> sections;
+			int maxH = -1;
+			for (int c = 0; c < synthImage.cols; c++) {
+				uint8_t last = 0;
+				int y = 0, height = 0;
+				for (int r = 0; r < synthImage.rows; r++) {
+					uint8_t curr = aImage.at<uint8_t>(r, c);
+					if (last == 0 && curr != 0)
+						y = r;
+					else if (last != 0 && curr == 0)
+						height = r - y;
+					else if (curr != 0 && r == synthImage.rows - 1)
+						height = r - y + 1;
+					last = curr;
+				}
+
+				if (sections.empty() || (y != sections.back().y || height != sections.back().height)) {
+					sections.push_back({ c, y, 1, height });
+					if (maxH < 0 || height > sections[maxH].height)
+						maxH = sections.size() - 1;
+				} else
+					sections.back().width++;
+			}
+
+			float px2m = facadeInfo[fi.first].height / facadeInfo[fi.first].size.y;
+			float cellw = (30.0 / cols) / px2m;
+			float cellh = (30.0 / rows) / px2m;
+			float winXoff = cellw * (1.0 - relativeWidth) / 2.0;
+			float winYoff = cellh * (1.0 - relativeHeight) / 2.0;
+			float winW = cellw * relativeWidth;
+			float winH = cellh * relativeHeight;
+			int shift = 4;
+
+			// Use max height to place cells
+			struct WindowGrid {
+				int rows;		// Number of rows in this section
+				int cols;		// Number of columns in this section
+				float xoffset;	// X offset from left in pixels
+				float yoffset;	// Y offset from top in pixels
+			};
+			vector<WindowGrid> winGrids(sections.size());
+
+			// Center rows vertically onto tallest section
+			winGrids[maxH].rows = floor(sections[maxH].height / cellh);
+			winGrids[maxH].yoffset = (sections[maxH].height / cellh - winGrids[maxH].rows) * cellh / 2;
+			for (int s = 0; s < winGrids.size(); s++) {
+				// Center cols horizontally on all sections
+				winGrids[s].cols = floor(sections[s].width / cellw);
+				winGrids[s].xoffset = (sections[s].width / cellw - winGrids[s].cols) * cellw / 2;
+				if (s != maxH) {
+					// Align vertical offset with that of tallest section
+					winGrids[s].yoffset = ceil((sections[s].y - winGrids[maxH].yoffset) / cellh)
+						* cellh + winGrids[maxH].yoffset - sections[s].y;
+					winGrids[s].rows = floor((sections[s].height - winGrids[s].yoffset) / cellh);
+				}
+			}
+
+			// Draw windows on all sections
+			for (int s = 0; s < sections.size(); s++) {
+				for (int r = 0; r < winGrids[s].rows; r++) {
+					for (int c = 0; c < winGrids[s].cols; c++) {
+						// Get coordinates of window rect
+						cv::Point pt1(
+							(c * cellw + winGrids[s].xoffset + sections[s].x + winXoff) * (1 << shift),
+							(r * cellh + winGrids[s].yoffset + sections[s].y + winYoff) * (1 << shift));
+						cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH * (1 << shift));
+
+						// Draw window rect
+						cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
+					}
+				}
+			}
+		}
+
+		// Save synthetic facade texture
+		fs::path synthPath = synthDir / (cluster + "_" + fiStr + ".png");
+		cv::imwrite(synthPath.string(), synthImage);
+	}
 }
 
 void Building::genReadMetadata(fs::path inputClusterDir) {

@@ -108,11 +108,11 @@ int main(int argc, char** argv) {
 				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
 
 				// Predict facade structure using DN
-				for (auto& fi : facadeMeta) {
+				for (auto& fi : facadeMeta)
 					dn_predict(fi.second.string(), "model_config.json");
 
-					// TODO: synthesize
-				}
+				// Synthesize facades
+				b.synthFacades(opts.outputDir, facadeMeta);
 
 			} catch (const exception& e) {
 				cout << "Failed to process cluster " << cidStr << ": " << e.what() << endl;
