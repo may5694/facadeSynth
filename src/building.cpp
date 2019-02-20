@@ -243,7 +243,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			// Calculate shadows
 			cv::Mat hShadow = hImage.clone();
 			hShadow.forEach<float>([](float& p, const int* position) -> void {
-				p = pow(cos((p - 0.6) * 2.0 * M_PI) * 0.5 + 0.5, 200.0);
+				p = pow(cos((p / 360.0 - 0.6) * 2.0 * M_PI) * 0.5 + 0.5, 200.0);
 			});
 			cv::boxFilter(hShadow, hShadow, -1, ks);
 			cv::Mat vShadow = vImage.clone();
@@ -265,7 +265,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			float w2 = 0.2;			// Brightness
 			float w3 = 0.45;		// Area
 			cv::Mat score = unOcc.mul(aImage).mul(
-				w1 * inShadow + w2 * vBright + w3 * areas[si] / maxArea);
+				w1 * (1.0 - inShadow) + w2 * vBright + w3 * areas[si] / maxArea);
 			float avgScore = cv::mean(score, aMask)[0];
 			// Find max score
 			if (avgScore > maxScore) {
@@ -317,7 +317,8 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		meta.AddMember("size", rj::Value().SetArray(), alloc);
 		meta["size"].PushBack(maxScoreRect.width * finfo.height / finfo.size.y, alloc);
 		meta["size"].PushBack(maxScoreRect.height * finfo.height / finfo.size.y, alloc);
-		meta.AddMember("ground", rj::Value().SetBool(finfo.ground), alloc);
+		meta.AddMember("ground", rj::Value().SetBool(finfo.ground
+			&& (maxScoreRect.y + maxScoreRect.height == finfo.size.y)), alloc);
 		meta.AddMember("score", rj::Value().SetFloat(maxScore), alloc);
 		meta.AddMember("imagename", rj::Value().SetString(imagePath.string().c_str(), alloc).Move(), alloc);
 		// Write to disk
