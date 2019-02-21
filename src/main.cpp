@@ -104,13 +104,16 @@ int main(int argc, char** argv) {
 					b.load(opts.dataDir, opts.region, cidStr, opts.model);
 				}
 
+				cout << "  Scoring facades..." << endl;
 				// Score all facades and return metadata
 				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
 
+				cout << "  Predicting parameters..." << endl;
 				// Predict facade structure using DN
 				for (auto& fi : facadeMeta)
 					dn_predict(fi.second.string(), "model_config.json");
 
+				cout << "  Synthesizing facades..." << endl;
 				// Synthesize facades
 				b.synthFacades(opts.outputDir, facadeMeta);
 

@@ -340,13 +340,17 @@ void dn_predict(std::string metajson, std::string modeljson) {
 				}
 			}
 		}
-		win_avg_color.val[0] = win_avg_color.val[0] / win_count;
-		win_avg_color.val[1] = win_avg_color.val[1] / win_count;
-		win_avg_color.val[2] = win_avg_color.val[2] / win_count;
+		if (win_count > 0) {
+			win_avg_color.val[0] = win_avg_color.val[0] / win_count;
+			win_avg_color.val[1] = win_avg_color.val[1] / win_count;
+			win_avg_color.val[2] = win_avg_color.val[2] / win_count;
+		}
 
-		bg_avg_color.val[0] = bg_avg_color.val[0] / bg_count;
-		bg_avg_color.val[1] = bg_avg_color.val[1] / bg_count;
-		bg_avg_color.val[2] = bg_avg_color.val[2] / bg_count;
+		if (bg_count > 0) {
+			bg_avg_color.val[0] = bg_avg_color.val[0] / bg_count;
+			bg_avg_color.val[1] = bg_avg_color.val[1] / bg_count;
+			bg_avg_color.val[2] = bg_avg_color.val[2] / bg_count;
+		}
 	}
 	// write back to json file
 	fp = fopen(metajson.c_str(), "w"); // non-Windows use "w"
