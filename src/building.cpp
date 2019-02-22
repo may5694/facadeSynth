@@ -358,137 +358,337 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 		fs::remove_all(synthDir);
 	fs::create_directory(synthDir);
 
+	// Initialize OpenGL
+	OpenGLContext ctx;
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glViewport(0, 0, atlasSize.x, atlasSize.y);
+
+	// Create framebuffer (atlas) texture
+	GLuint fbtex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlasSize.x, atlasSize.y, 0,
+		GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	// Create framebuffer object
+	GLuint fbo = ctx.genFramebuffer();
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	// Create vertex buffer (we only need atlas coords)
+	GLuint atbuf = ctx.genBuffer();
+	glBindBuffer(GL_ARRAY_BUFFER, atbuf);
+	glBufferData(GL_ARRAY_BUFFER, atlasTCBuf.size() * sizeof(atlasTCBuf[0]),
+		atlasTCBuf.data(), GL_STATIC_DRAW);
+	// Create index buffer
+	GLuint ibuf = ctx.genBuffer();
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexBuf.size() * sizeof(indexBuf[0]),
+		indexBuf.data(), GL_STATIC_DRAW);
+
+	// Create vertex array object
+	GLuint vao = ctx.genVAO();
+	glBindVertexArray(vao);
+	glBindBuffer(GL_ARRAY_BUFFER, atbuf);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+
+	// Vertex shader
+	static const string vsh_str = R"(
+		#version 460
+
+		layout(location = 0) in vec2 tc;
+
+		smooth out vec2 fragTC;
+
+		uniform mat4 tcXform;
+
+		void main() {
+			gl_Position = vec4(tc * vec2(2) - vec2(1), 0.0, 1.0);
+			fragTC = vec2(tcXform * vec4(tc, 0.0, 1.0));
+		})";
+	// Fragment shader
+	static const string fsh_str = R"(
+		#version 460
+
+		smooth in vec2 fragTC;
+
+		out vec4 outCol;
+
+		uniform sampler2D texSampler;
+		uniform vec3 color;
+		uniform bool useTex;
+
+		void main() {
+			if (useTex)
+				outCol = texture(texSampler, fragTC);
+			else
+				outCol = vec4(color, 1.0);
+		})";
+
+	// Compile and link shaders
+	vector<GLuint> shaders;
+	shaders.push_back(ctx.compileShader(GL_VERTEX_SHADER, vsh_str));
+	shaders.push_back(ctx.compileShader(GL_FRAGMENT_SHADER, fsh_str));
+	GLuint program = ctx.linkProgram(shaders);
+	GLuint xformLoc = glGetUniformLocation(program, "tcXform");
+	GLuint colorLoc = glGetUniformLocation(program, "color");
+	GLuint useTexLoc = glGetUniformLocation(program, "useTex");
+	glUseProgram(program);
+
+	// Create synthetic facade texture
+	GLuint facadeTex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, facadeTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
 	// Iterate over all facades
-	for (auto fi : facades) {
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
 		string fiStr; {
 			stringstream ss;
-			ss << setw(4) << setfill('0') << fi.first;
+			ss << setw(4) << setfill('0') << fi;
 			fiStr = ss.str();
 		}
 
-		// Read metadata
-		ifstream metaFile(fi.second);
-		rj::IStreamWrapper isw(metaFile);
-		rj::Document meta;
-		meta.ParseStream(isw);
+		// If we have DN metadata for this facade, synthesize a texture with windows
+		if (facades.count(fi)) {
 
-		// Store values from metadata
-		string si = meta["satellite"].GetString();
-		bool valid = meta["valid"].GetBool();
-		cv::Scalar bg_color;
-		bg_color[0] = meta["bg_color"][0].GetDouble();
-		bg_color[1] = meta["bg_color"][1].GetDouble();
-		bg_color[2] = meta["bg_color"][2].GetDouble();
-		bg_color[3] = 255;
-		cv::Scalar window_color;
-		if (valid) {
-			window_color[0] = meta["window_color"][0].GetDouble();
-			window_color[1] = meta["window_color"][1].GetDouble();
-			window_color[2] = meta["window_color"][2].GetDouble();
-			window_color[3] = 255;
-		}
+			// Read metadata
+			ifstream metaFile(facades[fi]);
+			rj::IStreamWrapper isw(metaFile);
+			rj::Document meta;
+			meta.ParseStream(isw);
 
-		// Load facade image
-		fs::path bgraPath = modelDir / "facade" / fiStr / (si + "_ps.png");
-		cv::Mat bgraImage = cv::imread(bgraPath.string(), CV_LOAD_IMAGE_UNCHANGED);
-		if (!bgraImage.data) {
-			cout << "Facade " << fiStr << " texture " << bgraPath.filename() << " missing!" << endl;
-			cout << bgraPath << endl;
-			continue;
-		}
-		// Extract alpha channel
-		cv::Mat aImage(bgraImage.size(), CV_8UC1);
-		cv::mixChannels(vector<cv::Mat>{ bgraImage }, vector<cv::Mat>{ aImage }, { 3, 0 });
-
-		// Create synthetic facade texture
-		cv::Mat synthImage = cv::Mat::zeros(aImage.size(), CV_8UC4);
-		synthImage.setTo(bg_color, aImage);
-
-		if (valid) {
-			// Read window parameters
-			int rows = meta["paras"]["rows"].GetInt();
-			int cols = meta["paras"]["cols"].GetInt();
-			float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
-			float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
-
-			// Separate into sections of equal vertical height
-			vector<cv::Rect> sections;
-			int maxH = -1;
-			for (int c = 0; c < synthImage.cols; c++) {
-				uint8_t last = 0;
-				int y = 0, height = 0;
-				for (int r = 0; r < synthImage.rows; r++) {
-					uint8_t curr = aImage.at<uint8_t>(r, c);
-					if (last == 0 && curr != 0)
-						y = r;
-					else if (last != 0 && curr == 0)
-						height = r - y;
-					else if (curr != 0 && r == synthImage.rows - 1)
-						height = r - y + 1;
-					last = curr;
-				}
-
-				if (sections.empty() || (y != sections.back().y || height != sections.back().height)) {
-					sections.push_back({ c, y, 1, height });
-					if (maxH < 0 || height > sections[maxH].height)
-						maxH = sections.size() - 1;
-				} else
-					sections.back().width++;
+			// Store values from metadata
+			string si = meta["satellite"].GetString();
+			bool valid = meta["valid"].GetBool();
+			cv::Scalar bg_color;
+			bg_color[0] = meta["bg_color"][0].GetDouble();
+			bg_color[1] = meta["bg_color"][1].GetDouble();
+			bg_color[2] = meta["bg_color"][2].GetDouble();
+			bg_color[3] = 255;
+			cv::Scalar window_color;
+			if (valid) {
+				window_color[0] = meta["window_color"][0].GetDouble();
+				window_color[1] = meta["window_color"][1].GetDouble();
+				window_color[2] = meta["window_color"][2].GetDouble();
+				window_color[3] = 255;
 			}
 
-			float px2m = facadeInfo[fi.first].height / facadeInfo[fi.first].size.y;
-			float cellw = (30.0 / cols) / px2m;
-			float cellh = (30.0 / rows) / px2m;
-			float winXoff = cellw * (1.0 - relativeWidth) / 2.0;
-			float winYoff = cellh * (1.0 - relativeHeight) / 2.0;
-			float winW = cellw * relativeWidth;
-			float winH = cellh * relativeHeight;
-			int shift = 4;
-
-			// Use max height to place cells
-			struct WindowGrid {
-				int rows;		// Number of rows in this section
-				int cols;		// Number of columns in this section
-				float xoffset;	// X offset from left in pixels
-				float yoffset;	// Y offset from top in pixels
-			};
-			vector<WindowGrid> winGrids(sections.size());
-
-			// Center rows vertically onto tallest section
-			winGrids[maxH].rows = floor(sections[maxH].height / cellh);
-			winGrids[maxH].yoffset = (sections[maxH].height / cellh - winGrids[maxH].rows) * cellh / 2;
-			for (int s = 0; s < winGrids.size(); s++) {
-				// Center cols horizontally on all sections
-				winGrids[s].cols = floor(sections[s].width / cellw);
-				winGrids[s].xoffset = (sections[s].width / cellw - winGrids[s].cols) * cellw / 2;
-				if (s != maxH) {
-					// Align vertical offset with that of tallest section
-					winGrids[s].yoffset = ceil((sections[s].y - winGrids[maxH].yoffset) / cellh)
-						* cellh + winGrids[maxH].yoffset - sections[s].y;
-					winGrids[s].rows = floor((sections[s].height - winGrids[s].yoffset) / cellh);
-				}
+			// Load facade image
+			fs::path bgraPath = modelDir / "facade" / fiStr / (si + "_ps.png");
+			cv::Mat bgraImage = cv::imread(bgraPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			if (!bgraImage.data) {
+				cout << "Facade " << fiStr << " texture " << bgraPath.filename()
+					<< " missing!" << endl;
+				cout << bgraPath << endl;
+				continue;
 			}
+			// Extract alpha channel
+			cv::Mat aImage(bgraImage.size(), CV_8UC1);
+			cv::mixChannels(vector<cv::Mat>{ bgraImage }, vector<cv::Mat>{ aImage }, { 3, 0 });
 
-			// Draw windows on all sections
-			for (int s = 0; s < sections.size(); s++) {
-				for (int r = 0; r < winGrids[s].rows; r++) {
-					for (int c = 0; c < winGrids[s].cols; c++) {
-						// Get coordinates of window rect
-						cv::Point pt1(
-							(c * cellw + winGrids[s].xoffset + sections[s].x + winXoff) * (1 << shift),
-							(r * cellh + winGrids[s].yoffset + sections[s].y + winYoff) * (1 << shift));
-						cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH * (1 << shift));
+			// Create synthetic facade texture
+			cv::Mat synthImage = cv::Mat::zeros(aImage.size(), CV_8UC4);
+			synthImage.setTo(bg_color, aImage);
 
-						// Draw window rect
-						cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
+			if (valid) {
+				// Read window parameters
+				int rows = meta["paras"]["rows"].GetInt();
+				int cols = meta["paras"]["cols"].GetInt();
+				float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
+				float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
+
+				// Separate into sections of equal vertical height
+				vector<cv::Rect> sections;
+				int maxH = -1;
+				for (int c = 0; c < synthImage.cols; c++) {
+					uint8_t last = 0;
+					int y = 0, height = 0;
+					for (int r = 0; r < synthImage.rows; r++) {
+						uint8_t curr = aImage.at<uint8_t>(r, c);
+						if (last == 0 && curr != 0)
+							y = r;
+						else if (last != 0 && curr == 0)
+							height = r - y;
+						else if (curr != 0 && r == synthImage.rows - 1)
+							height = r - y + 1;
+						last = curr;
+					}
+
+					if (sections.empty() || (y != sections.back().y ||
+							height != sections.back().height)) {
+						sections.push_back({ c, y, 1, height });
+						if (maxH < 0 || height > sections[maxH].height)
+							maxH = sections.size() - 1;
+					} else
+						sections.back().width++;
+				}
+
+				float px2m = facadeInfo[fi].height / facadeInfo[fi].size.y;
+				float cellw = (30.0 / cols) / px2m;
+				float cellh = (30.0 / rows) / px2m;
+				float winXoff = cellw * (1.0 - relativeWidth) / 2.0;
+				float winYoff = cellh * (1.0 - relativeHeight) / 2.0;
+				float winW = cellw * relativeWidth;
+				float winH = cellh * relativeHeight;
+				int shift = 4;
+
+				// Use max height to place cells
+				struct WindowGrid {
+					int rows;		// Number of rows in this section
+					int cols;		// Number of columns in this section
+					float xoffset;	// X offset from left in pixels
+					float yoffset;	// Y offset from top in pixels
+				};
+				vector<WindowGrid> winGrids(sections.size());
+
+				// Center rows vertically onto tallest section
+				winGrids[maxH].rows = floor(sections[maxH].height / cellh);
+				winGrids[maxH].yoffset = (sections[maxH].height / cellh
+					- winGrids[maxH].rows) * cellh / 2;
+				for (int s = 0; s < winGrids.size(); s++) {
+					// Center cols horizontally on all sections
+					winGrids[s].cols = floor(sections[s].width / cellw);
+					winGrids[s].xoffset = (sections[s].width / cellw - winGrids[s].cols) * cellw / 2;
+					if (s != maxH) {
+						// Align vertical offset with that of tallest section
+						winGrids[s].yoffset = ceil((sections[s].y - winGrids[maxH].yoffset) / cellh)
+							* cellh + winGrids[maxH].yoffset - sections[s].y;
+						winGrids[s].rows = floor((sections[s].height - winGrids[s].yoffset) / cellh);
+					}
+				}
+
+				// Draw windows on all sections
+				for (int s = 0; s < sections.size(); s++) {
+					for (int r = 0; r < winGrids[s].rows; r++) {
+						for (int c = 0; c < winGrids[s].cols; c++) {
+							// Get coordinates of window rect
+							cv::Point pt1(
+								(c * cellw + winGrids[s].xoffset + sections[s].x + winXoff) * (1 << shift),
+								(r * cellh + winGrids[s].yoffset + sections[s].y + winYoff) * (1 << shift));
+							cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH * (1 << shift));
+
+							// Draw window rect
+							cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
+						}
 					}
 				}
 			}
-		}
 
-		// Save synthetic facade texture
-		fs::path synthPath = synthDir / (cluster + "_" + fiStr + ".png");
-		cv::imwrite(synthPath.string(), synthImage);
+			// Save synthetic facade texture
+			fs::path synthPath = synthDir / (cluster + "_" + fiStr + ".png");
+			cv::imwrite(synthPath.string(), synthImage);
+
+
+			// Upload facade texture to OpenGL
+			cv::flip(synthImage, synthImage, 0);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, synthImage.cols, synthImage.rows, 0,
+				GL_BGRA, GL_UNSIGNED_BYTE, synthImage.data);
+
+			// Set texture coordinate transformation matrix
+			cv::Rect2f atlasBB = facadeInfo[fi].atlasBB;
+			glm::mat4 xlate(1.0);
+			xlate[3] = glm::vec4(-atlasBB.x, -atlasBB.y, 0.0, 1.0);
+			glm::mat4 scale(1.0);
+			scale[0][0] = 1.0 / atlasBB.width;
+			scale[1][1] = 1.0 / atlasBB.height;
+			glm::mat4 xform = scale * xlate;
+			glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(xform));
+			// Set to draw with texture
+			glUniform1i(useTexLoc, true);
+
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+
+
+		// If we don't have DN metadata, use the average facade color
+		} else {
+
+			// Load one view of this facade (pick the first one we have)
+			fs::path facadePath = modelDir / "facade" / fiStr /
+				(*(facadeInfo[fi].inSats.begin()) + "_ps.png");
+			cv::Mat facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			if (!facadeImage.data) {
+				cout << "Facade " << fiStr << " texture " << facadePath.filename()
+					<< " missing!" << endl;
+				continue;
+			}
+
+			// Separate alpha channel
+			cv::Mat aMask(facadeImage.size(), CV_8UC1);
+			cv::mixChannels(vector<cv::Mat>{ facadeImage }, vector<cv::Mat>{ aMask }, { 3, 0 });
+
+			// Get mean color
+			cv::Scalar meanCol = cv::mean(facadeImage, aMask);
+			glm::vec3 drawCol(meanCol[0] / 255.0, meanCol[1] / 255.0, meanCol[2] / 255.0);
+
+			// Set color in shader
+			glUniform3fv(colorLoc, 1, glm::value_ptr(drawCol));
+			glUniform1i(useTexLoc, false);
+
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+		}
+	}
+
+	// Download atlas texture
+	cv::Mat atlasImage(atlasSize.y, atlasSize.x, CV_8UC4);
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, atlasImage.data);
+	cv::flip(atlasImage, atlasImage, 0);
+
+	// Save to disk
+	fs::path atlasPath = outDir / (cluster + "_synth_atlas.png");
+	cv::imwrite(atlasPath.string(), atlasImage);
+
+	// Output OBJ and MTL files
+	fs::path objPath = outDir / (cluster + "_synth_texture.obj");
+	fs::path mtlPath = objPath; mtlPath.replace_extension(".mtl");
+	ofstream objFile(objPath);
+	ofstream mtlFile(mtlPath);
+
+	// Create atlas material
+	mtlFile << "newmtl atlas" << endl;
+	mtlFile << "map_Kd " << atlasPath.filename().string() << endl;
+
+	// Use atlas material
+	objFile << "mtllib " << mtlPath.filename().string() << endl;
+	objFile << "usemtl atlas" << endl;
+	objFile << endl;
+
+	// Write all vertex positions
+	for (auto v : posBuf)
+		objFile << "v " << v.x << " " << v.y << " " << v.z << endl;
+	objFile << endl;
+	// Write all vertex normals
+	for (auto n : normBuf)
+		objFile << "vn " << n.x << " " << n.y << " " << n.z << endl;
+	objFile << endl;
+	// Write all texture coordinates
+	for (auto t : atlasTCBuf)
+		objFile << "vt " << t.x << " " << t.y << endl;
+	objFile << endl;
+
+	// Write all faces
+	for (size_t f = 0; f < indexBuf.size(); f += 3) {
+		objFile << "f ";
+		objFile << indexBuf[f + 0] + 1 << "/"
+				<< indexBuf[f + 0] + 1 << "/"
+				<< indexBuf[f + 0] + 1 << " ";
+		objFile << indexBuf[f + 1] + 1 << "/"
+				<< indexBuf[f + 1] + 1 << "/"
+				<< indexBuf[f + 1] + 1 << " ";
+		objFile << indexBuf[f + 2] + 1 << "/"
+				<< indexBuf[f + 2] + 1 << "/"
+				<< indexBuf[f + 2] + 1 << endl;
 	}
 }
 
