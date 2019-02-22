@@ -26,6 +26,8 @@ public:
 	// Score all facades and save metadata for each
 	std::map<size_t, fs::path> scoreFacades(fs::path outputDir);
 	void synthFacades(fs::path outputDir, std::map<size_t, fs::path> facades);
+	static void combineOutput(fs::path dataDir, fs::path outputDir, std::string region,
+		std::string model, std::set<std::string> clusters);
 
 	// Geometry accessors
 	const auto& getPosBuf() const { return posBuf; }

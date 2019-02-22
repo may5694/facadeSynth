@@ -19,8 +19,9 @@ namespace fs = std::experimental::filesystem;
 struct Options {
 	// Commandline options
 	string region;			// Which region to process (must be specified)
-	set<int> clusters;		// Which clusters to process (empty -> all in region)
+	set<string> clusters;	// Which clusters to process (empty -> all in region)
 	string model;			// Which model to use (e.g., cgv_r, cgv_a, etc.)
+	bool all;				// Use all clusters in region
 	bool noop;				// Do nothing (used for --help)
 	fs::path configPath;	// Path to config file
 	bool generate;			// Generate data from input directories
@@ -34,6 +35,7 @@ struct Options {
 	// Constructor - set default values
 	Options() :
 		model("cgv_r"),
+		all(false),
 		noop(false),
 		configPath("config.json"),
 		generate(false) {}
@@ -83,25 +85,19 @@ int main(int argc, char** argv) {
 			sats = loadSatellites(opts);
 
 		// Process each cluster
-		for (auto id : opts.clusters) {
-			// Get cluster ID string
-			string cidStr; {
-				stringstream ss; ss << setw(4) << setfill('0') << id;
-				cidStr = ss.str();
-			}
-
+		for (auto cluster : opts.clusters) {
 			try {
-				fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cidStr;
-				fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cidStr;
+				fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cluster;
+				fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cluster;
 				Building b;
 				// Load or generate building
 				if (opts.generate) {
-					cout << "Generating cluster " << cidStr << "..." << endl;
+					cout << "Generating cluster " << cluster << "..." << endl;
 					b.generate(opts.regionDir, opts.satelliteDir, opts.dataDir, sats,
-						opts.region, cidStr, opts.model);
+						opts.region, cluster, opts.model);
 				} else {
-					cout << "Loading cluster " << cidStr << "..." << endl;
-					b.load(opts.dataDir, opts.region, cidStr, opts.model);
+					cout << "Loading cluster " << cluster << "..." << endl;
+					b.load(opts.dataDir, opts.region, cluster, opts.model);
 				}
 
 				cout << "  Scoring facades..." << endl;
@@ -118,9 +114,15 @@ int main(int argc, char** argv) {
 				b.synthFacades(opts.outputDir, facadeMeta);
 
 			} catch (const exception& e) {
-				cout << "Failed to process cluster " << cidStr << ": " << e.what() << endl;
+				cout << "Failed to process cluster " << cluster << ": " << e.what() << endl;
 				continue;
 			}
+		}
+
+		if (opts.all) {
+			cout << "Combining all clusters..." << endl;
+			Building::combineOutput(opts.dataDir, opts.outputDir,
+				opts.region, opts.model, opts.clusters);
 		}
 
 	// Handle any exceptions
@@ -165,12 +167,16 @@ Options parseCmd(int argc, char** argv) {
 			// Try to get an integer from the arg string
 			try {
 				string arg = argv[a];
-				opts.clusters.insert(stoi(arg));
+				stoi(arg);
+				opts.clusters.insert(arg);
 			// If failed, stop trying to get cluster IDs
 			} catch (const exception& e) {
 				break;
 			}
 		}
+		// If no clusters specified, use all clusters
+		if (opts.clusters.empty())
+			opts.all = true;
 
 		// Look at all remaining arguments
 		for (; a < argc; a++) {
@@ -343,7 +349,8 @@ void checkDirectories(Options& opts) {
 			if (!fs::is_directory(di->path())) continue;
 			// Only allow integer-named directories
 			try {
-				opts.clusters.insert(stoi(di->path().filename().string()));
+				stoi(di->path().filename().string());
+				opts.clusters.insert(di->path().filename().string());
 			} catch (const exception& e) { continue; }
 		}
 
@@ -353,12 +360,9 @@ void checkDirectories(Options& opts) {
 
 		for (auto it = opts.clusters.begin(); it != opts.clusters.end(); ) {
 			// Get cluster ID string
-			string cidStr; {
-				stringstream ss; ss << setw(4) << setfill('0') << *it;
-				cidStr = ss.str();
-			}
-			if (!fs::exists(clusterDir / cidStr) || fs::is_empty(clusterDir / cidStr)) {
-				cout << "Cluster " << cidStr << " not found! Skipping..." << endl;
+			string cluster = *it;
+			if (!fs::exists(clusterDir / cluster) || fs::is_empty(clusterDir / cluster)) {
+				cout << "Cluster " << cluster << " not found! Skipping..." << endl;
 				it = opts.clusters.erase(it);
 			} else
 				++it;

@@ -627,7 +627,7 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 
 			// Get mean color
 			cv::Scalar meanCol = cv::mean(facadeImage, aMask);
-			glm::vec3 drawCol(meanCol[0] / 255.0, meanCol[1] / 255.0, meanCol[2] / 255.0);
+			glm::vec3 drawCol(meanCol[2] / 255.0, meanCol[1] / 255.0, meanCol[0] / 255.0);
 
 			// Set color in shader
 			glUniform3fv(colorLoc, 1, glm::value_ptr(drawCol));
@@ -689,6 +689,95 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 		objFile << indexBuf[f + 2] + 1 << "/"
 				<< indexBuf[f + 2] + 1 << "/"
 				<< indexBuf[f + 2] + 1 << endl;
+	}
+}
+
+// Combine .obj outputs of specified clusters, using synthesized texture atlases
+void Building::combineOutput(fs::path dataDir, fs::path outputDir, string region, string model,
+	set<string> clusters) {
+
+	// Load all buildings
+	vector<Building> bldgs;
+	glm::vec3 minBB(FLT_MAX), maxBB(-FLT_MAX);
+	for (auto cluster : clusters) {
+		Building b;
+		try {
+			b.load(dataDir, region, cluster, model);
+		} catch (const exception& e) {
+			cout << "Failed to load " << region << " " << cluster << " " << model
+				<< ". Skipping..." << endl;
+			continue;
+		}
+
+		// Get absolute bounding box
+		minBB = glm::min(minBB, b.minBB + b.origin);
+		maxBB = glm::max(maxBB, b.maxBB + b.origin);
+		bldgs.push_back(std::move(b));
+	}
+	glm::vec3 center = glm::vec3(glm::vec2(minBB + (maxBB - minBB) / 2.0f), 0.0f);
+
+	// Create output directory
+	fs::path outDir = outputDir / region / "all" / model;
+	if (fs::exists(outDir))
+		fs::remove_all(outDir);
+	fs::create_directories(outDir);
+
+	// Create output OBJ and MTL files
+	fs::path objPath = outDir / (region + "_all_synth_texture.obj");
+	fs::path mtlPath = objPath; mtlPath.replace_extension(".mtl");
+	ofstream objFile(objPath);
+	ofstream mtlFile(mtlPath);
+
+	objFile << "mtllib " << mtlPath.filename().string() << endl << endl;
+
+	// Iterate over all buildings
+	int idx_offset = 0;
+	for (auto& b : bldgs) {
+		// Copy synth atlas
+		string atlasName = b.cluster + "_synth_atlas.png";
+		fs::copy_file(outputDir / region / b.cluster / model / atlasName,
+			outDir / atlasName);
+
+		// Add material
+		mtlFile << "newmtl " << b.cluster << "_atlas" << endl;
+		mtlFile << "map_Kd " << atlasName << endl;
+
+		// Add cluster group, use new material
+		objFile << "g " << b.cluster << endl;
+		objFile << "usemtl " << b.cluster << "_atlas" << endl;
+		objFile << endl;
+
+		// Write all vertex positions
+		for (auto v : b.posBuf) {
+			v = v + b.origin - center;
+			objFile << "v " << v.x << " " << v.y << " " << v.z << endl;
+		}
+		objFile << endl;
+		// Write all vertex normals
+		for (auto n : b.normBuf)
+			objFile << "vn " << n.x << " " << n.y << " " << n.z << endl;
+		objFile << endl;
+		// Write all texture coords
+		for (auto t : b.atlasTCBuf)
+			objFile << "vt " << t.x << " " << t.y << endl;
+		objFile << endl;
+
+		// Write all faces
+		for (size_t f = 0; f < b.indexBuf.size(); f += 3) {
+			objFile << "f ";
+			objFile << b.indexBuf[f + 0] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 0] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 0] + idx_offset + 1 << " ";
+			objFile << b.indexBuf[f + 1] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 1] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 1] + idx_offset + 1 << " ";
+			objFile << b.indexBuf[f + 2] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 2] + idx_offset + 1 << "/"
+					<< b.indexBuf[f + 2] + idx_offset + 1 << endl;
+		}
+		objFile << endl;
+
+		idx_offset += b.posBuf.size();
 	}
 }
 
