@@ -824,6 +824,7 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 //		cout << objWarn << endl;
 
 	// Get satellite bounding rects
+	map<string, int> satVertCount;
 	for (auto& si : sats) {
 		Satellite& sat = si.second;
 
@@ -847,6 +848,7 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 		// Save satellite info
 		satInfo[sat.name].name = sat.name;
 		satInfo[sat.name].roi = bb;
+		satVertCount[sat.name] = 0;
 	}
 
 	// Add faces to geometry buffers
@@ -963,8 +965,10 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 					if (!satPts.count(satName))
 						satTCBufs[satName].push_back({ -1.0, -1.0 });
 					// Otherwise give it the projected coordinates
-					else
+					else {
 						satTCBufs[satName].push_back(satPts[satName][v]);
+						satVertCount[satName]++;
+					}
 				}
 
 				// Update bounding box
@@ -973,6 +977,14 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 			}
 
 			idx_offset += fv;
+		}
+	}
+
+	// Remove any unused satellites
+	for (auto si : satVertCount) {
+		if (si.second == 0) {
+			satInfo.erase(si.first);
+			satTCBufs.erase(si.first);
 		}
 	}
 
@@ -1200,9 +1212,9 @@ void Building::genFacades() {
 				glm::vec2 ta = satTCBufs[si.first][indexBuf[3 * f + 0]];
 				glm::vec2 tb = satTCBufs[si.first][indexBuf[3 * f + 1]];
 				glm::vec2 tc = satTCBufs[si.first][indexBuf[3 * f + 2]];
-				if (ta.x >= 0.0 && ta.y >= 0.0 &&
-					tb.x >= 0.0 && tb.y >= 0.0 &&
-					tc.x >= 0.0 && tc.y >= 0.0) {
+				if (ta.x >= -0.5 && ta.y >= -0.5 &&
+					tb.x >= -0.5 && tb.y >= -0.5 &&
+					tc.x >= -0.5 && tc.y >= -0.5) {
 					observed = true;
 					break;
 				}
@@ -1265,9 +1277,9 @@ void Building::genWriteData(fs::path dataDir) {
 			glm::vec2 tc = satTCBufs[si.first][indexBuf[f + 2]];
 
 			// Skip if no projection
-			if (ta.x < 0.0 || ta.y < 0.0 ||
-				tb.x < 0.0 || tb.y < 0.0 ||
-				tc.x < 0.0 || tc.y < 0.0) continue;
+			if (ta.x < -0.5 || ta.y < -0.5 ||
+				tb.x < -0.5 || tb.y < -0.5 ||
+				tc.x < -0.5 || tc.y < -0.5) continue;
 
 			// Write texture coordinates
 			objFile << setprecision(20) << "vt " << ta.x << " " << ta.y << endl;
@@ -1508,9 +1520,9 @@ void Building::genTextures(fs::path dataDir, fs::path satelliteDir, map<string, 
 
 		void main() {
 			// Skip triangles without valid texture coords
-			if (geoTC[0].x < 0.0 || geoTC[0].y < 0.0 ||
-				geoTC[1].x < 0.0 || geoTC[1].y < 0.0 ||
-				geoTC[2].x < 0.0 || geoTC[2].y < 0.0) return;
+			if (geoTC[0].x < -0.5 || geoTC[0].y < -0.5 ||
+				geoTC[1].x < -0.5 || geoTC[1].y < -0.5 ||
+				geoTC[2].x < -0.5 || geoTC[2].y < -0.5) return;
 
 			gl_Position = gl_in[0].gl_Position;
 			fragTC = geoTC[0];
