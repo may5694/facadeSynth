@@ -218,6 +218,9 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 
 			// Find the largest inscribed rectangle
 			cv::Rect inRect = util::findLargestRectangle(aMask);
+			// Skip empty rectangles
+			if (inRect.width <= 0 || inRect.height <= 0)
+				continue;
 			bgraImage = bgraImage(inRect);
 			bgrImage = bgrImage(inRect);
 			aImage = aImage(inRect);
