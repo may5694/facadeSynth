@@ -48,13 +48,21 @@ Satellite::Satellite(string filename) : rpcXformer(NULL) {
 	// Get each band as an OpenCV Mat
 	vector<cv::Mat> bands;
 	for (int i = 1; i <= satFile->GetRasterCount(); i++) {
+		// Read raster band
 		GDALRasterBand* pband = satFile->GetRasterBand(i);
-		cv::Mat ch = cv::Mat::zeros(pband->GetYSize(), pband->GetXSize(), cvType(pband->GetRasterDataType()));
+		GDALDataType gdt = pband->GetRasterDataType();
+		cv::Mat ch = cv::Mat::zeros(pband->GetYSize(), pband->GetXSize(), cvType(gdt));
 		CPLErr err = pband->RasterIO(GF_Read, 0, 0, pband->GetXSize(), pband->GetYSize(),
-			ch.data, ch.cols, ch.rows, pband->GetRasterDataType(), 0, 0, NULL);
+			ch.data, ch.cols, ch.rows, gdt, 0, 0, NULL);
 		if (err != CE_None)
 			throw runtime_error("Error reading raster band");
-		ch.convertTo(ch, CV_8U, 255);
+
+		// Convert to 8-bit
+		if (gdt == GDT_Float32 || gdt == GDT_Float64)
+			ch.convertTo(ch, CV_8U, 255);
+		else if (gdt != GDT_Byte)
+			ch.convertTo(ch, CV_8U);
+
 		bands.push_back(ch);
 	}
 	// Swap R and B channels for OpenCV
