@@ -181,8 +181,9 @@ Options parseCmd(int argc, char** argv) {
 			// Try to get an integer from the arg string
 			try {
 				string arg = argv[a];
-				stoi(arg);
-				opts.clusters.insert(arg);
+				int cid = stoi(arg);
+				stringstream ss; ss << setw(4) << setfill('0') << cid;
+				opts.clusters.insert(ss.str());
 			// If failed, stop trying to get cluster IDs
 			} catch (const exception& e) {
 				break;
