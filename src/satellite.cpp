@@ -121,6 +121,8 @@ Satellite& Satellite::operator=(Satellite&& other) {
 // Calculate the bounding box based on a set of projected points
 cv::Rect Satellite::calcBB(vector<cv::Point2f> allPts, int border) {
 	cv::Rect bb = cv::boundingRect(allPts);
+	bb &= cv::Rect(0, 0, satImg.cols, satImg.rows);
+	if (bb.width <= 0 || bb.height <= 0) return bb;
 	// Expand bounding rect on all sides
 	bb -= cv::Point(border, border);
 	bb += cv::Size(2 * border, 2 * border);

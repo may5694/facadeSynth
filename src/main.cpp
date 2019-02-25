@@ -84,45 +84,59 @@ int main(int argc, char** argv) {
 		if (opts.generate)
 			sats = loadSatellites(opts);
 
-		// Process each cluster
+		// Load or generate each cluster
+		vector<Building> bldgs;
 		for (auto cluster : opts.clusters) {
 			try {
-				fs::path inputClusterIDDir = opts.regionDir / opts.region / "BuildingClusters" / cluster;
-				fs::path dataClusterIDDir = opts.dataDir / "regions" / opts.region / cluster;
 				Building b;
-				// Load or generate building
 				if (opts.generate) {
 					cout << "Generating cluster " << cluster << "..." << endl;
-					b.generate(opts.regionDir, opts.satelliteDir, opts.dataDir, sats,
-						opts.region, cluster, opts.model);
+					b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cluster, opts.model);
 				} else {
 					cout << "Loading cluster " << cluster << "..." << endl;
 					b.load(opts.dataDir, opts.region, cluster, opts.model);
 				}
-
-				cout << "  Scoring facades..." << endl;
-				// Score all facades and return metadata
-				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
-
-				cout << "  Predicting parameters..." << endl;
-				// Predict facade structure using DN
-				for (auto& fi : facadeMeta)
-					dn_predict(fi.second.string(), "model_config.json");
-
-				cout << "  Synthesizing facades..." << endl;
-				// Synthesize facades
-				b.synthFacades(opts.outputDir, facadeMeta);
-
+				bldgs.push_back(std::move(b));
 			} catch (const exception& e) {
-				cout << "Failed to process cluster " << cluster << ": " << e.what() << endl;
+				cout << "Failed to " << (opts.generate ? "generate" : "load") << " cluster "
+					<< cluster << ": " << e.what() << endl;
 				continue;
 			}
 		}
 
+		// Generate cluster masks if they're missing
+		fs::path clusterMaskDir = opts.dataDir / "clusterMasks" / opts.region / opts.model;
+		if (!fs::exists(clusterMaskDir) && opts.all && opts.generate) {
+			cout << "Generating cluster masks..." << endl;
+			Building::createClusterMasks(opts.dataDir, sats, opts.region, opts.model, bldgs);
+		}
+
+		// Process each building
+		for (auto& b : bldgs) {
+			cout << b.getCluster() << ":" << endl;
+			try {
+				// Score facades
+				cout << "    Scoring facades..." << endl;
+				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
+
+				// Predict facade structure using DN
+				cout << "    Predicting parameters..." << endl;
+				for (auto& fi : facadeMeta)
+					dn_predict(fi.second.string(), "model_config.json");
+
+				// Synthesize facades
+				cout << "    Synthesizing facades..." << endl;
+				b.synthFacades(opts.outputDir, facadeMeta);
+			} catch (const exception& e) {
+				cout << "Failed to process cluster " << b.getCluster() << ": " << e.what() << endl;
+				continue;
+			}
+		}
+
+		// Combine all cluster outputs
 		if (opts.all) {
 			cout << "Combining all clusters..." << endl;
-			Building::combineOutput(opts.dataDir, opts.outputDir,
-				opts.region, opts.model, opts.clusters);
+			Building::combineOutput(opts.dataDir, opts.outputDir, opts.region, opts.model, bldgs);
 		}
 
 	// Handle any exceptions

@@ -306,7 +306,8 @@ void dn_predict(std::string metajson, std::string modeljson) {
 	std::vector<torch::jit::IValue> inputs;
 	inputs.push_back(img_tensor);
 	torch::Tensor out_tensor = module->forward(inputs).toTensor();
-	std::cout << out_tensor.slice(1, 0, num_paras) << std::endl;
+	if (bDebug)
+		std::cout << out_tensor.slice(1, 0, num_paras) << std::endl;
 	std::vector<double> paras;
 	for (int i = 0; i < num_paras; i++) {
 		paras.push_back(out_tensor.slice(1, i, i + 1).item<float>());

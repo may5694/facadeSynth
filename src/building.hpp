@@ -15,8 +15,7 @@ struct FacadeInfo;
 class Building {
 public:
 	// Generate building data
-	void generate(fs::path regionDir, fs::path satelliteDir, fs::path dataDir,
-		std::map<std::string, Satellite>& sats,
+	void generate(fs::path regionDir, fs::path dataDir, std::map<std::string, Satellite>& sats,
 		std::string region, std::string cluster, std::string model);
 	// Load existing building data
 	void load(fs::path dataDir, std::string region, std::string cluster, std::string model);
@@ -27,7 +26,9 @@ public:
 	std::map<size_t, fs::path> scoreFacades(fs::path outputDir);
 	void synthFacades(fs::path outputDir, std::map<size_t, fs::path> facades);
 	static void combineOutput(fs::path dataDir, fs::path outputDir, std::string region,
-		std::string model, std::set<std::string> clusters);
+		std::string model, std::vector<Building>& bldgs);
+	static void createClusterMasks(fs::path dataDir, std::map<std::string, Satellite>& sats,
+		std::string region, std::string model, std::vector<Building>& bldgs);
 
 	// Geometry accessors
 	const auto& getPosBuf() const { return posBuf; }
@@ -36,6 +37,9 @@ public:
 	const auto& getSatTCBufs() const { return satTCBufs; }
 	const auto& getIndexBuf() const { return indexBuf; }
 	// Metadata accessors
+	std::string getRegion() const { return region; }
+	std::string getCluster() const { return cluster; }
+	std::string getModel() const { return model; }
 	uint32_t getEPSGCode() const { return epsgCode; }
 	glm::vec3 getOrigin() const { return origin; }
 	glm::uvec2 getAtlasSize() const { return atlasSize; }
@@ -69,7 +73,8 @@ private:
 	void genGeometry(fs::path inputModelDir, std::map<std::string, Satellite>& sats);
 	void genFacades();
 	void genWriteData(fs::path dataDir);
-	void genTextures(fs::path dataDir, fs::path satelliteDir, std::map<std::string, Satellite>& sats);
+	void genTextures(fs::path dataDir, std::map<std::string, Satellite>& sats);
+	void genClusterMasks(fs::path dataDir);
 	// Loading methods
 	void loadGeometry(fs::path objPath);
 	void loadMetadata(fs::path metaPath);
