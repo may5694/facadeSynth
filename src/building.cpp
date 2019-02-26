@@ -14,7 +14,7 @@ namespace fs = std::experimental::filesystem;
 namespace rj = rapidjson;
 
 // Generate building data from input directory, and save it to data directory
-void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satellite>& sats,
+void Building::generate(fs::path clusterDir, fs::path dataDir, map<string, Satellite>& sats,
 	string region, string cluster, string model) {
 	// Clear any existing contents
 	clear();
@@ -24,7 +24,7 @@ void Building::generate(fs::path inputDir, fs::path dataDir, map<string, Satelli
 		throw runtime_error("No satellite images!");
 
 	// Check for input directory existence
-	fs::path inputClusterDir = inputDir / region / "BuildingClusters" / cluster;
+	fs::path inputClusterDir = clusterDir / cluster;
 	if (!fs::exists(inputClusterDir)) {
 		stringstream ss;
 		ss << "Couldn't find cluster \"" << cluster << "\", region \""
@@ -74,7 +74,7 @@ void Building::load(fs::path dataDir, string region, string cluster, string mode
 	clear();
 
 	// Check path to building data
-	modelDir = dataDir / "regions" / region / cluster / model;
+	modelDir = dataDir / "regions" / region / model / cluster;
 	if (!fs::exists(modelDir)) {
 		stringstream ss;
 		ss << "No data for model \"" << model << "\", cluster \"" << cluster
@@ -137,7 +137,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	map<size_t, fs::path> facadeMap;
 
 	// Create output directories
-	fs::path outDir = outputDir / region / cluster / model;
+	fs::path outDir = outputDir / region / model / cluster;
 	if (!fs::exists(outDir))
 		fs::create_directories(outDir);
 	fs::path imageDir = outDir / "image";
@@ -357,7 +357,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 // Synthesize facades based on network output parameters
 void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 	// Create output directory
-	fs::path outDir = outputDir / region / cluster / model;
+	fs::path outDir = outputDir / region / model / cluster;
 	fs::path synthDir = outDir / "synth";
 	if (fs::exists(synthDir))
 		fs::remove_all(synthDir);
@@ -699,7 +699,7 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 }
 
 // Combine .obj outputs of specified clusters, using synthesized texture atlases
-void Building::combineOutput(fs::path dataDir, fs::path outputDir, string region, string model,
+void Building::combineOutput(fs::path outputDir, string region, string model,
 	vector<Building>& bldgs) {
 
 	// Get bounding box of all buildings
@@ -711,7 +711,7 @@ void Building::combineOutput(fs::path dataDir, fs::path outputDir, string region
 	glm::vec3 center = glm::vec3(glm::vec2(minBB + (maxBB - minBB) / 2.0f), 0.0f);
 
 	// Create output directory
-	fs::path outDir = outputDir / region / "all" / model;
+	fs::path outDir = outputDir / region / model / "all";
 	if (fs::exists(outDir))
 		fs::remove_all(outDir);
 	fs::create_directories(outDir);
@@ -729,12 +729,12 @@ void Building::combineOutput(fs::path dataDir, fs::path outputDir, string region
 	for (auto& b : bldgs) {
 		// Copy synth atlas
 		string atlasName = b.cluster + "_synth_atlas.png";
-		fs::path atlasPath = outputDir / region / b.cluster / model / atlasName;
+		fs::path atlasPath = outputDir / region / model / b.cluster / atlasName;
 		if (!fs::exists(atlasPath)) {
 			cout << atlasPath << " not found! Skipping..." << endl;
 			continue;
 		}
-		fs::copy_file(outputDir / region / b.cluster / model / atlasName,
+		fs::copy_file(outputDir / region / model / b.cluster / atlasName,
 			outDir / atlasName);
 
 		// Add material
@@ -971,8 +971,8 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 			// Degenerate if largest edge <= sum of smaller edges
 			if (lengths[0] + lengths[1] <= lengths[2] + 1e-4) {
 				idx_offset += fv;
-				cout << "Degenerate triangle! "
-					<< lengths[0] << " " << lengths[1] << " " << lengths[2] << endl;
+//				cout << "Degenerate triangle! "
+//					<< lengths[0] << " " << lengths[1] << " " << lengths[2] << endl;
 				continue;
 			}
 
@@ -1340,7 +1340,7 @@ void Building::genFacades() {
 // Writes building data to the data directory
 void Building::genWriteData(fs::path dataDir) {
 	// Create data directories as needed
-	modelDir = dataDir / "regions" / region / cluster / model;
+	modelDir = dataDir / "regions" / region / model / cluster;
 	if (!fs::exists(modelDir))
 		fs::create_directories(modelDir);
 

@@ -20,14 +20,14 @@ struct Options {
 	// Commandline options
 	string region;			// Which region to process (must be specified)
 	set<string> clusters;	// Which clusters to process (empty -> all in region)
-	string model;			// Which model to use (e.g., cgv_r, cgv_a, etc.)
+	string model;			// Which model to use (e.g., cgv_r, cgv_a, hist, etc.)
 	bool all;				// Use all clusters in region
 	bool noop;				// Do nothing (used for --help)
 	fs::path configPath;	// Path to config file
 	bool generate;			// Generate data from input directories
 
 	// Config file options
-	fs::path regionDir;		// Dir containing regions with clusters
+	fs::path clusterDir;	// Dir containing clusters in a region
 	fs::path satelliteDir;	// Dir containing pansharpened satellite imagery per region
 	fs::path dataDir;		// Saved data output directory
 	fs::path outputDir;		// Synthesized facades output directory
@@ -43,7 +43,6 @@ struct Options {
 
 // Functions
 Options parseCmd(int argc, char** argv);
-void genConfig(fs::path configPath);
 void readConfig(Options& opts);
 void checkDirectories(Options& opts);
 map<string, Satellite> loadSatellites(Options& opts);
@@ -55,24 +54,6 @@ int main(int argc, char** argv) {
 		Options opts = parseCmd(argc, argv);
 		if (opts.noop) return 0;
 
-		// Check if config file exists
-		if (!fs::exists(opts.configPath)) {
-			cout << "Configuration file " << opts.configPath << " does not exist!" << endl;
-			// Ask to generate a template file
-			while (true) {
-				cout << "Generate template? (y/n): ";
-				char c;
-				cin >> c;
-				if (c == 'y' || c == 'Y') {
-					// Generate a template config file
-					genConfig(opts.configPath);
-					break;
-				} else if (c == 'n' || c == 'N') {
-					break;
-				}
-			}
-			return 0;
-		}
 		// Read config file
 		readConfig(opts);
 
@@ -91,7 +72,7 @@ int main(int argc, char** argv) {
 				Building b;
 				if (opts.generate) {
 					cout << "Generating cluster " << cluster << "..." << endl;
-					b.generate(opts.regionDir, opts.dataDir, sats, opts.region, cluster, opts.model);
+					b.generate(opts.clusterDir, opts.dataDir, sats, opts.region, cluster, opts.model);
 				} else {
 					cout << "Loading cluster " << cluster << "..." << endl;
 					b.load(opts.dataDir, opts.region, cluster, opts.model);
@@ -113,7 +94,7 @@ int main(int argc, char** argv) {
 
 		// Process each building
 		for (auto& b : bldgs) {
-			cout << b.getCluster() << ":" << endl;
+			cout << "Processing cluster " << b.getCluster() << "..." << endl;
 			try {
 				// Score facades
 				cout << "    Scoring facades..." << endl;
@@ -136,7 +117,7 @@ int main(int argc, char** argv) {
 		// Combine all cluster outputs
 		if (opts.all) {
 			cout << "Combining all clusters..." << endl;
-			Building::combineOutput(opts.dataDir, opts.outputDir, opts.region, opts.model, bldgs);
+			Building::combineOutput(opts.outputDir, opts.region, opts.model, bldgs);
 		}
 
 	// Handle any exceptions
@@ -239,33 +220,6 @@ Options parseCmd(int argc, char** argv) {
 	return opts;
 }
 
-// Generates a template config file at the specified path
-void genConfig(fs::path configPath) {
-	try {
-		rj::Document templateConfig;
-		templateConfig.SetObject();
-		// Directory settings
-		templateConfig.AddMember("regionDir", "", templateConfig.GetAllocator());
-		templateConfig.AddMember("satelliteDir", "", templateConfig.GetAllocator());
-		templateConfig.AddMember("dataDir", "", templateConfig.GetAllocator());
-		templateConfig.AddMember("outputDir", "", templateConfig.GetAllocator());
-
-		// Write template config to file
-		ofstream templateFile;
-		templateFile.exceptions(ios::badbit | ios::failbit | ios::eofbit);
-		templateFile.open(configPath);
-		rj::OStreamWrapper osw(templateFile);
-		rj::PrettyWriter<rj::OStreamWrapper> writer(osw);
-		templateConfig.Accept(writer);
-		templateFile << endl;
-
-	} catch (const exception& e) {
-		stringstream ss;
-		ss << "Failed to generate template config file: " << e.what();
-		throw runtime_error(ss.str());
-	}
-}
-
 // Loads the configuration file and stores its parameters into global variables
 void readConfig(Options& opts) {
 	try {
@@ -275,9 +229,19 @@ void readConfig(Options& opts) {
 		rj::Document config;
 		config.ParseStream(isw);
 
-		// Store parameters
-		opts.regionDir = config["regionDir"].GetString();
-		opts.satelliteDir = config["satelliteDir"].GetString();
+		// Make sure cmdline options are configured
+		fs::path inputDir = config["inputDir"].GetString();
+		if (!config["regions"].HasMember(opts.region.c_str()))
+			throw runtime_error("No region \"" + opts.region + "\" in config file!");
+		if (!config["regions"][opts.region.c_str()]["models"].HasMember(opts.model.c_str()))
+			throw runtime_error("No model \"" + opts.model + "\" in region \"" + opts.region
+				+ "\" in config file!");
+
+		// Read directories from config file
+		opts.clusterDir = inputDir / config["regions"][opts.region.c_str()]
+			["models"][opts.model.c_str()]["clusterDir"].GetString();
+		opts.satelliteDir = inputDir / config["regions"][opts.region.c_str()]
+			["satelliteDir"].GetString();
 		opts.dataDir = config["dataDir"].GetString();
 		opts.outputDir = config["outputDir"].GetString();
 
@@ -295,9 +259,14 @@ void checkDirectories(Options& opts) {
 	// Look at input directories only if we're generating data
 	if (opts.generate) {
 		// Check for existence of input directories
-		if (!fs::exists(opts.regionDir)) {
+		if (!fs::exists(opts.clusterDir)) {
 			stringstream ss;
-			ss << "Region directory " << opts.regionDir << " does not exist!";
+			ss << "Cluster directory " << opts.clusterDir << " does not exist!";
+			throw runtime_error(ss.str());
+		}
+		if (fs::is_empty(opts.clusterDir)) {
+			stringstream ss;
+			ss << "Cluster directory " << opts.clusterDir << " is empty!";
 			throw runtime_error(ss.str());
 		}
 		if (!fs::exists(opts.satelliteDir)) {
@@ -305,23 +274,11 @@ void checkDirectories(Options& opts) {
 			ss << "Satellite directory " << opts.satelliteDir << " does not exist!";
 			throw runtime_error(ss.str());
 		}
-
-		// Check if region exists
-		if (!fs::exists(opts.regionDir / opts.region))
-			throw runtime_error("No region found with name \"" + opts.region + "\"");
-		fs::path clusterDir = opts.regionDir / opts.region / "BuildingClusters";
-		if (!fs::exists(clusterDir) || fs::is_empty(clusterDir))
-			throw runtime_error("No clusters for region \"" + opts.region + "\"");
-
-		// Check if satellite images exist
-		fs::path pansharpenedDir = opts.satelliteDir / opts.region / "pansharpened";
-		if (!fs::exists(pansharpenedDir) || fs::is_empty(pansharpenedDir))
-			throw runtime_error("No satellite images for region \"" + opts.region + "\"");
-
-		// Check if cluster masks exist
-		fs::path clusterMaskDir = opts.satelliteDir / opts.region / "clusterMasks" / opts.model;
-		if (!fs::exists(clusterMaskDir) || fs::is_empty(clusterMaskDir))
-			throw runtime_error("No cluster masks for region \"" + opts.region + "\", model \"" + opts.model + "\"");
+		if (fs::is_empty(opts.satelliteDir)) {
+			stringstream ss;
+			ss << "Satellite directory " << opts.satelliteDir << " is empty!";
+			throw runtime_error(ss.str());
+		}
 
 		// Create data directory if it doesn't exist
 		if (!fs::exists(opts.dataDir))
@@ -353,11 +310,10 @@ void checkDirectories(Options& opts) {
 	if (!fs::exists(opts.outputDir / opts.region))
 		fs::create_directory(opts.outputDir / opts.region);
 
-	fs::path inputClusterDir = opts.regionDir / opts.region / "BuildingClusters";
-	fs::path dataClusterDir = opts.dataDir / "regions" / opts.region;
+	fs::path dataClusterDir = opts.dataDir / "regions" / opts.region / opts.model;
 	// Use all clusters in region if none specified
 	if (opts.clusters.empty()) {
-		fs::path clusterDir = opts.generate ? inputClusterDir : dataClusterDir;
+		fs::path clusterDir = opts.generate ? opts.clusterDir : dataClusterDir;
 
 		// Look for any integer-named directory to use as a cluster
 		for (fs::directory_iterator di(clusterDir), dend; di != dend; ++di) {
@@ -371,7 +327,7 @@ void checkDirectories(Options& opts) {
 
 	// Remove any non-existing clusters from cluster list
 	} else {
-		fs::path clusterDir = opts.generate ? inputClusterDir : dataClusterDir;
+		fs::path clusterDir = opts.generate ? opts.clusterDir : dataClusterDir;
 
 		for (auto it = opts.clusters.begin(); it != opts.clusters.end(); ) {
 			// Get cluster ID string
@@ -396,9 +352,8 @@ void checkDirectories(Options& opts) {
 
 // Reads all satellite datasets and returns a map of satellite name to Satellite object
 map<string, Satellite> loadSatellites(Options& opts) {
-	fs::path satDir = opts.satelliteDir / opts.region / "pansharpened";
 	map<string, Satellite> sats;
-	for (fs::directory_iterator di(satDir), dend; di != dend; ++di) {
+	for (fs::directory_iterator di(opts.satelliteDir), dend; di != dend; ++di) {
 		// Skip non-files and those not ending in .tif
 		if (!fs::is_regular_file(di->path()) || di->path().extension() != ".tif")
 			continue;

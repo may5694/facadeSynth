@@ -15,7 +15,7 @@ struct FacadeInfo;
 class Building {
 public:
 	// Generate building data
-	void generate(fs::path regionDir, fs::path dataDir, std::map<std::string, Satellite>& sats,
+	void generate(fs::path clusterDir, fs::path dataDir, std::map<std::string, Satellite>& sats,
 		std::string region, std::string cluster, std::string model);
 	// Load existing building data
 	void load(fs::path dataDir, std::string region, std::string cluster, std::string model);
@@ -25,8 +25,8 @@ public:
 	// Score all facades and save metadata for each
 	std::map<size_t, fs::path> scoreFacades(fs::path outputDir);
 	void synthFacades(fs::path outputDir, std::map<size_t, fs::path> facades);
-	static void combineOutput(fs::path dataDir, fs::path outputDir, std::string region,
-		std::string model, std::vector<Building>& bldgs);
+	static void combineOutput(fs::path outputDir, std::string region, std::string model,
+		std::vector<Building>& bldgs);
 	static void createClusterMasks(fs::path dataDir, std::map<std::string, Satellite>& sats,
 		std::string region, std::string model, std::vector<Building>& bldgs);
 
