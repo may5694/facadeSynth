@@ -946,6 +946,7 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 			map<string, vector<glm::vec2>> satPts;
 
 			// Skip degenerate and down-facing triangles
+			glm::vec3 normal;
 			{ tinyobj::index_t ia = shapes[s].mesh.indices[idx_offset + 0];
 			glm::vec3 va;
 			va.x = attrib.vertices[3 * ia.vertex_index + 0];
@@ -977,7 +978,7 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 			}
 
 			// Skip if facing downward
-			glm::vec3 normal = glm::normalize(glm::cross(vb - va, vc - va));
+			normal = glm::normalize(glm::cross(vb - va, vc - va));
 			if (1.0 - glm::dot(normal, { 0.0, 0.0, -1.0 }) < 1e-4) {
 				idx_offset += fv;
 				continue;
@@ -1043,15 +1044,21 @@ void Building::genGeometry(fs::path inputModelDir, map<string, Satellite>& sats)
 			for (size_t v = 0; v < fv; v++) {
 				tinyobj::index_t idx = shapes[s].mesh.indices[idx_offset + v];
 
-				// Add position and normal
+				// Add position
 				posBuf.push_back({
 					attrib.vertices[3 * idx.vertex_index + 0],
 					attrib.vertices[3 * idx.vertex_index + 1],
 					attrib.vertices[3 * idx.vertex_index + 2]});
-				normBuf.push_back({
-					attrib.normals[3 * idx.normal_index + 0],
-					attrib.normals[3 * idx.normal_index + 1],
-					attrib.normals[3 * idx.normal_index + 2]});
+
+				// Use computed normal if mesh doesn't have normals
+				if (idx.normal_index < 0)
+					normBuf.push_back(normal);
+				// Otherwise use mesh normals
+				else
+					normBuf.push_back({
+						attrib.normals[3 * idx.normal_index + 0],
+						attrib.normals[3 * idx.normal_index + 1],
+						attrib.normals[3 * idx.normal_index + 2]});
 
 				// Add all texture coordinates
 				for (auto& si : satInfo) {
