@@ -509,14 +509,40 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 				int cols = meta["paras"]["cols"].GetInt();
 				float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
 				float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
+				// Read door parameters if we have doors
+				bool hasDoors = meta["paras"].HasMember("doors");
+				int doors = 0;
+				float relativeDWidth = 0.0, relativeDHeight = 0.0;
+				if (hasDoors) {
+					doors = meta["paras"]["doors"].GetInt();
+					relativeDWidth = meta["paras"]["relativeDWidth"].GetFloat();
+					relativeDHeight = meta["paras"]["relativeDHeight"].GetFloat();
+				}
 
-				// Separate into sections of equal vertical height
-				vector<cv::Rect> sections;
-				int maxH = -1;
+				// Get sizes and spacing in pixels
+				float px2m = facadeInfo[fi].height / facadeInfo[fi].size.y;
+				float winCellW = (30.0 / cols) / px2m;
+				float winCellH = (30.0 / rows) / px2m;
+				float winW = winCellW * relativeWidth;
+				float winH = winCellH * relativeHeight;
+				float winXsep = winCellW * (1.0 - relativeWidth);
+				float winYsep = winCellH * (1.0 - relativeHeight);
+				float winXoff = winXsep / 2.0;
+				float winYoff = winYsep / 2.0;
+				float doorCellW = (30.0 / max(doors, 1)) / px2m;
+				float doorW = doorCellW * relativeDWidth;
+				float doorH = (30.0 * relativeDHeight) / px2m;
+				float doorXsep = doorCellW * (1.0 - relativeDWidth);
+				float doorXoff = doorXsep / 2.0;
+				int shift = 4;
+
+				// Separate into sections for the doors
+				vector<cv::Rect> doorSections;
+				if (hasDoors) {
 				for (int c = 0; c < synthImage.cols; c++) {
 					uint8_t last = 0;
-					int y = 0, height = 0;
-					for (int r = 0; r < synthImage.rows; r++) {
+					int y = synthImage.rows - ceil(doorH), height = 0;
+					for (int r = synthImage.rows - ceil(doorH); r < synthImage.rows; r++) {
 						uint8_t curr = aImage.at<uint8_t>(r, c);
 						if (last == 0 && curr != 0)
 							y = r;
@@ -527,23 +553,71 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 						last = curr;
 					}
 
-					if (sections.empty() || (y != sections.back().y ||
-							height != sections.back().height)) {
-						sections.push_back({ c, y, 1, height });
-						if (maxH < 0 || height > sections[maxH].height)
-							maxH = sections.size() - 1;
-					} else
-						sections.back().width++;
+					// Only consider sections equal to door height
+					if (height == ceil(doorH)) {
+						// Add new section if none or prev row height not match
+						if (doorSections.empty() ||
+							doorSections.back().x + doorSections.back().width < c)
+							doorSections.push_back({ c, y, 1, height });
+						// Otherwise expand current section
+						else
+							doorSections.back().width++;
+					}
 				}
 
-				float px2m = facadeInfo[fi].height / facadeInfo[fi].size.y;
-				float cellw = (30.0 / cols) / px2m;
-				float cellh = (30.0 / rows) / px2m;
-				float winXoff = cellw * (1.0 - relativeWidth) / 2.0;
-				float winYoff = cellh * (1.0 - relativeHeight) / 2.0;
-				float winW = cellw * relativeWidth;
-				float winH = cellh * relativeHeight;
-				int shift = 4;
+				// Center doors on each door section
+				struct DoorGrid {
+					int cols;
+					float xoffset;
+				};
+				vector<DoorGrid> doorGrids(doorSections.size());
+				for (int s = 0; s < doorGrids.size(); s++) {
+					doorGrids[s].cols = floor(doorSections[s].width / doorCellW);
+					doorGrids[s].xoffset = (doorSections[s].width / doorCellW - doorGrids[s].cols)
+						* doorCellW / 2;
+				}
+
+				// Draw doors on all door sections
+				for (int s = 0; s < doorSections.size(); s++) {
+					for (int c = 0; c < doorGrids[s].cols; c++) {
+						// Get coordinates of door rect
+						cv::Point pt1(
+							(c * doorCellW + doorGrids[s].xoffset + doorSections[s].x + doorXoff)
+								* (1 << shift),
+							doorSections[s].y * (1 << shift));
+						cv::Point pt2(
+							pt1.x + doorW * (1 << shift), synthImage.rows * (1 << shift));
+
+						// Draw door rect
+						cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
+					}
+				}}
+
+				// Separate into window sections of equal vertical height
+				vector<cv::Rect> winSections;
+				int maxH = -1;
+				for (int c = 0; c < synthImage.cols; c++) {
+					uint8_t last = 0;
+					int y = 0, height = 0;
+					for (int r = 0; r < synthImage.rows - ceil(doorH); r++) {
+						uint8_t curr = aImage.at<uint8_t>(r, c);
+						if (last == 0 && curr != 0)
+							y = r;
+						else if (last != 0 && curr == 0)
+							height = r - y;
+						else if (curr != 0 && r == synthImage.rows - ceil(doorH) - 1)
+							height = r - y + 1;
+						last = curr;
+					}
+
+					if (winSections.empty() || (y != winSections.back().y ||
+							height != winSections.back().height)) {
+						winSections.push_back({ c, y, 1, height });
+						if (maxH < 0 || height > winSections[maxH].height)
+							maxH = winSections.size() - 1;
+					} else
+						winSections.back().width++;
+				}
 
 				// Use max height to place cells
 				struct WindowGrid {
@@ -552,33 +626,38 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 					float xoffset;	// X offset from left in pixels
 					float yoffset;	// Y offset from top in pixels
 				};
-				vector<WindowGrid> winGrids(sections.size());
+				vector<WindowGrid> winGrids(winSections.size());
 
 				// Center rows vertically onto tallest section
-				winGrids[maxH].rows = floor(sections[maxH].height / cellh);
-				winGrids[maxH].yoffset = (sections[maxH].height / cellh
-					- winGrids[maxH].rows) * cellh / 2;
+				winGrids[maxH].rows = floor(winSections[maxH].height / winCellH);
+				winGrids[maxH].yoffset = (winSections[maxH].height / winCellH
+					- winGrids[maxH].rows) * winCellH / 2;
 				for (int s = 0; s < winGrids.size(); s++) {
 					// Center cols horizontally on all sections
-					winGrids[s].cols = floor(sections[s].width / cellw);
-					winGrids[s].xoffset = (sections[s].width / cellw - winGrids[s].cols) * cellw / 2;
+					winGrids[s].cols = floor(winSections[s].width / winCellW);
+					winGrids[s].xoffset = (winSections[s].width / winCellW - winGrids[s].cols)
+						* winCellW / 2;
 					if (s != maxH) {
 						// Align vertical offset with that of tallest section
-						winGrids[s].yoffset = ceil((sections[s].y - winGrids[maxH].yoffset) / cellh)
-							* cellh + winGrids[maxH].yoffset - sections[s].y;
-						winGrids[s].rows = floor((sections[s].height - winGrids[s].yoffset) / cellh);
+						winGrids[s].yoffset = ceil((winSections[s].y - winGrids[maxH].yoffset)
+							/ winCellH) * winCellH + winGrids[maxH].yoffset - winSections[s].y;
+						winGrids[s].rows = floor((winSections[s].height - winGrids[s].yoffset)
+							/ winCellH);
 					}
 				}
 
 				// Draw windows on all sections
-				for (int s = 0; s < sections.size(); s++) {
+				for (int s = 0; s < winSections.size(); s++) {
 					for (int r = 0; r < winGrids[s].rows; r++) {
 						for (int c = 0; c < winGrids[s].cols; c++) {
 							// Get coordinates of window rect
 							cv::Point pt1(
-								(c * cellw + winGrids[s].xoffset + sections[s].x + winXoff) * (1 << shift),
-								(r * cellh + winGrids[s].yoffset + sections[s].y + winYoff) * (1 << shift));
-							cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH * (1 << shift));
+								(c * winCellW + winGrids[s].xoffset + winSections[s].x + winXoff)
+									* (1 << shift),
+								(r * winCellH + winGrids[s].yoffset + winSections[s].y + winYoff)
+									* (1 << shift));
+							cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH
+									* (1 << shift));
 
 							// Draw window rect
 							cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
