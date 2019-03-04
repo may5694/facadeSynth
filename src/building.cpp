@@ -572,7 +572,7 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 				};
 				vector<DoorGrid> doorGrids(doorSections.size());
 				for (int s = 0; s < doorGrids.size(); s++) {
-					doorGrids[s].cols = floor(doorSections[s].width / doorCellW);
+					doorGrids[s].cols = floor((doorSections[s].width + doorXsep / 2) / doorCellW);
 					doorGrids[s].xoffset = (doorSections[s].width / doorCellW - doorGrids[s].cols)
 						* doorCellW / 2;
 				}
@@ -586,7 +586,7 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 								* (1 << shift),
 							doorSections[s].y * (1 << shift));
 						cv::Point pt2(
-							pt1.x + doorW * (1 << shift), synthImage.rows * (1 << shift));
+							pt1.x + doorW * (1 << shift) - 1, synthImage.rows * (1 << shift) - 1);
 
 						// Draw door rect
 						cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
@@ -634,7 +634,7 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 					- winGrids[maxH].rows) * winCellH / 2;
 				for (int s = 0; s < winGrids.size(); s++) {
 					// Center cols horizontally on all sections
-					winGrids[s].cols = floor(winSections[s].width / winCellW);
+					winGrids[s].cols = floor((winSections[s].width + winXsep / 2) / winCellW);
 					winGrids[s].xoffset = (winSections[s].width / winCellW - winGrids[s].cols)
 						* winCellW / 2;
 					if (s != maxH) {
@@ -656,8 +656,8 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 									* (1 << shift),
 								(r * winCellH + winGrids[s].yoffset + winSections[s].y + winYoff)
 									* (1 << shift));
-							cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift), winH
-									* (1 << shift));
+							cv::Point pt2 = pt1 + cv::Point(winW * (1 << shift) - 1, winH
+									* (1 << shift) - 1);
 
 							// Draw window rect
 							cv::rectangle(synthImage, pt1, pt2, window_color, -1, cv::LINE_AA, shift);
@@ -1030,7 +1030,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						d.cols = 0;
 						continue;
 					}
-					d.cols = floor((d.maxBB.x - d.minBB.x + doorXsep) / doorCellW);
+					d.cols = floor((d.maxBB.x - d.minBB.x + doorXsep / 2) / doorCellW);
 					d.xoffset = ((d.maxBB.x - d.minBB.x) - d.cols * doorCellW) / 2;
 
 					// If no doors, just output the segment
@@ -1099,7 +1099,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				for (int si = 0; si < winSections.size(); si++) {
 					WinSection& s = winSections[si];
 					// Center rows horizontally on all sections
-					s.cols = floor((s.maxBB.x - s.minBB.x + winXsep) / winCellW);
+					s.cols = floor((s.maxBB.x - s.minBB.x + winXsep / 2) / winCellW);
 					s.xoffset = ((s.maxBB.x - s.minBB.x) - s.cols * winCellW) / 2;
 					// Align columns with columns on the tallest section
 					if (si != maxH) {
