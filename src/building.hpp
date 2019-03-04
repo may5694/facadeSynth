@@ -24,7 +24,8 @@ public:
 
 	// Score all facades and save metadata for each
 	std::map<size_t, fs::path> scoreFacades(fs::path outputDir);
-	void synthFacades(fs::path outputDir, std::map<size_t, fs::path> facades);
+	void synthFacadeTextures(fs::path outputDir, std::map<size_t, fs::path> facades);
+	void synthFacadeGeometry(fs::path outputDir, std::map<size_t, fs::path> facades);
 	static void combineOutput(fs::path outputDir, std::string region, std::string model,
 		std::vector<Building>& bldgs);
 	static void createClusterMasks(fs::path dataDir, std::map<std::string, Satellite>& sats,

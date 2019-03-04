@@ -354,8 +354,8 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	return facadeMap;
 }
 
-// Synthesize facades based on network output parameters
-void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
+// Synthesize facade textures based on network output parameters
+void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> facades) {
 	// Create output directory
 	fs::path outDir = outputDir / region / model / cluster;
 	fs::path synthDir = outDir / "synth";
@@ -774,6 +774,500 @@ void Building::synthFacades(fs::path outputDir, map<size_t, fs::path> facades) {
 		objFile << indexBuf[f + 2] + 1 << "/"
 				<< indexBuf[f + 2] + 1 << "/"
 				<< indexBuf[f + 2] + 1 << endl;
+	}
+}
+
+// Synthesize facade geometry using deep network parameters
+void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> facades) {
+
+	// Create output OBJ file
+	fs::path outDir = outputDir / region / model / cluster;
+	fs::path objPath = outDir / (cluster + "_synth_geometry.obj");
+	ofstream objFile(objPath);
+	int vcount = 0;
+
+	// Iterate over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		string fiStr; {
+			stringstream ss;
+			ss << setw(4) << setfill('0') << fi;
+			fiStr = ss.str();
+		}
+
+		// If we have DN metadata for this facade, synthesize a facade with windows
+		if (facades.count(fi)) {
+
+			// Read metadata
+			ifstream metaFile(facades[fi]);
+			rj::IStreamWrapper isw(metaFile);
+			rj::Document meta;
+			meta.ParseStream(isw);
+
+			// Store values from metadata
+			string si = meta["satellite"].GetString();
+			bool valid = meta["valid"].GetBool();
+			glm::vec3 bg_color;
+			bg_color.x = meta["bg_color"][0].GetDouble() / 255;
+			bg_color.y = meta["bg_color"][1].GetDouble() / 255;
+			bg_color.z = meta["bg_color"][2].GetDouble() / 255;
+
+			// If valid DN output, add windows and doors
+			if (valid) {
+				glm::vec3 window_color;
+				window_color.x = meta["window_color"][0].GetDouble() / 255;
+				window_color.y = meta["window_color"][1].GetDouble() / 255;
+				window_color.z = meta["window_color"][2].GetDouble() / 255;
+
+				// Read window parameters
+				int rows = meta["paras"]["rows"].GetInt();
+				int cols = meta["paras"]["cols"].GetInt();
+				float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
+				float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
+				// Read door parameters if we have doors
+				bool hasDoors = meta["paras"].HasMember("doors");
+				int doors = 0;
+				float relativeDWidth = 0.0, relativeDHeight = 0.0;
+				if (hasDoors) {
+					doors = meta["paras"]["doors"].GetInt();
+					relativeDWidth = meta["paras"]["relativeDWidth"].GetFloat();
+					relativeDHeight = meta["paras"]["relativeDHeight"].GetFloat();
+				}
+
+				// Get sizes and spacing
+				float winCellW = 30.0 / cols;
+				float winCellH = 30.0 / rows;
+				float winW = winCellW * relativeWidth;
+				float winH = winCellH * relativeHeight;
+				float winXsep = winCellW * (1.0 - relativeWidth);
+				float winYsep = winCellH * (1.0 - relativeHeight);
+				float winXoff = winXsep / 2.0;
+				float winYoff = winYsep / 2.0;
+				float doorCellW = 30.0 / max(doors, 1);
+				float doorW = doorCellW * relativeDWidth;
+				float doorH = 30.0 * relativeDHeight;
+				float doorXsep = doorCellW * (1.0 - relativeDWidth);
+				float doorXoff = doorXsep / 2.0;
+
+				// Reorient facade for easier window placement
+				glm::mat4 xform(1.0);
+				glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
+				if (glm::dot(norm, { 0.0, 0.0, 1.0 }) < 1.0) {
+					glm::vec3 up(0.0, 0.0, 1.0);
+					glm::vec3 right = glm::normalize(glm::cross(up, norm));
+					up = glm::normalize(glm::cross(norm, right));
+
+					xform[0] = glm::vec4(right, 0.0f);
+					xform[1] = glm::vec4(up, 0.0f);
+					xform[2] = glm::vec4(norm, 0.0f);
+					xform = glm::transpose(xform);
+				}
+
+				// Get rotated facade offset
+				glm::vec3 minXYZ(FLT_MAX);
+				for (auto f : facadeInfo[fi].faceIDs) {
+					for (int vi = 0; vi < 3; vi++) {
+						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+						minXYZ = glm::min(minXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
+					}
+				}
+				xform[3] = glm::vec4(-minXYZ, 1.0);
+				glm::mat4 invXform = glm::inverse(xform);
+
+				// Get section boundaries along X
+				auto sepCmp = [](const float& a, const float& b) -> bool {
+					static const float eps = 1e-2;
+					if (abs(a - b) > eps) return a < b;
+					return false;
+				};
+				set<float, decltype(sepCmp)> xsep(sepCmp);
+				for (auto f : facadeInfo[fi].faceIDs) {
+					for (int vi = 0; vi < 3; vi++) {
+						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+						xsep.insert((xform * glm::vec4(v, 1.0)).x);
+					}
+				}
+
+				// Separate facade into window sections
+				struct WinSection {
+					glm::vec2 minBB;
+					glm::vec2 maxBB;
+					int rows;
+					int cols;
+					float xoffset;
+					float yoffset;
+				};
+				vector<WinSection> winSections;
+				for (auto xi = xsep.begin(); xi != xsep.end(); ++xi) {
+					if (!winSections.empty())
+						winSections.back().maxBB.x = *xi;
+					auto xiNext = xi; ++xiNext;
+					if (xiNext != xsep.end()) {
+						winSections.push_back({});
+						winSections.back().minBB.x = *xi;
+					}
+				}
+
+				// Get vertical bounds of each section
+				for (auto f : facadeInfo[fi].faceIDs) {
+					// Get triangle bbox
+					glm::vec2 minTBB(FLT_MAX);
+					glm::vec2 maxTBB(-FLT_MAX);
+					for (int vi = 0; vi < 3; vi++) {
+						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+						minTBB = glm::min(minTBB, glm::vec2(xform * glm::vec4(v, 1.0)));
+						maxTBB = glm::max(maxTBB, glm::vec2(xform * glm::vec4(v, 1.0)));
+					}
+
+					// Intersect with all sections
+					for (auto& s : winSections) {
+						if (minTBB.x + 1e-2 < s.maxBB.x && maxTBB.x - 1e-2 > s.minBB.x) {
+							s.minBB.y = min(s.minBB.y, minTBB.y);
+							s.maxBB.y = max(s.maxBB.y, maxTBB.y);
+						}
+					}
+				}
+
+				// Combine adjacent sections of equal vertical bounds
+				for (auto si = winSections.begin(); si != winSections.end();) {
+					auto siNext = si; siNext++;
+					if (siNext == winSections.end()) break;
+					if (abs(si->minBB.y - siNext->minBB.y) < 1e-4 &&
+						abs(si->maxBB.y - siNext->maxBB.y) < 1e-4) {
+						si->maxBB.x = siNext->maxBB.x;
+						winSections.erase(siNext);
+					} else
+						++si;
+				}
+
+				// Separate window sections into door sections if we have any doors
+				struct DoorSection {
+					glm::vec2 minBB;
+					glm::vec2 maxBB;
+					int cols;
+					float xoffset;
+				};
+				vector<DoorSection> doorSections;
+				if (hasDoors) {
+					// Iterate over window sections
+					for (auto wi = winSections.begin(); wi != winSections.end();) {
+						// Win section is entirely below door line
+						if (wi->maxBB.y < doorH) {
+							doorSections.push_back({});
+							doorSections.back().minBB = wi->minBB;
+							doorSections.back().maxBB = wi->maxBB;
+							wi = winSections.erase(wi);
+
+						// Win section is partially below door line
+						} else if (wi->minBB.y < doorH) {
+							doorSections.push_back({});
+							doorSections.back().minBB = wi->minBB;
+							doorSections.back().maxBB.x = wi->maxBB.x;
+							doorSections.back().maxBB.y = doorH;
+							wi->minBB.y = doorH;
+							++wi;
+
+						// Win section is completely above door line
+						} else
+							++wi;
+					}
+
+					// Combine adjacent door sections of equal vertical bounds
+					for (auto di = doorSections.begin(); di != doorSections.end();) {
+						auto diNext = di; ++diNext;
+						if (diNext == doorSections.end()) break;
+						if (abs(di->minBB.y - diNext->minBB.y) < 1e-4 &&
+							abs(di->maxBB.y - diNext->maxBB.y) < 1e-4) {
+							di->maxBB.x = diNext->maxBB.x;
+							doorSections.erase(diNext);
+						} else
+							++di;
+					}
+				}
+
+				// Method to write a face to the OBJ file
+				auto writeFace = [&](glm::vec3 va, glm::vec3 vb, glm::vec3 vc, glm::vec3 vd,
+					glm::vec3 norm, bool window) {
+
+					// Set the color to use
+					glm::vec3 color = window ? window_color : bg_color;
+
+					// Transform positions
+					va = glm::vec3(invXform * glm::vec4(va, 1.0));
+					vb = glm::vec3(invXform * glm::vec4(vb, 1.0));
+					vc = glm::vec3(invXform * glm::vec4(vc, 1.0));
+					vd = glm::vec3(invXform * glm::vec4(vd, 1.0));
+
+					// Write positions
+					objFile << "v " << va.x << " " << va.y << " " << va.z << " "
+						<< color.x << " " << color.y << " " << color.z << endl;
+					objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
+						<< color.x << " " << color.y << " " << color.z << endl;
+					objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
+						<< color.x << " " << color.y << " " << color.z << endl;
+					objFile << "v " << vd.x << " " << vd.y << " " << vd.z << " "
+						<< color.x << " " << color.y << " " << color.z << endl;
+
+					// Write normals
+					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+
+					// Write indices
+					objFile << "f " << vcount+1 << "//" << vcount+1 << " "
+						<< vcount+2 << "//" << vcount+2 << " "
+						<< vcount+3 << "//" << vcount+3 << endl;
+					objFile << "f " << vcount+3 << "//" << vcount+3 << " "
+						<< vcount+4 << "//" << vcount+4 << " "
+						<< vcount+1 << "//" << vcount+1 << endl;
+
+					vcount += 4;
+				};
+
+				// Center doors on each door section
+				for (auto& d : doorSections) {
+					if (d.maxBB.y - d.minBB.y < doorH) {
+						d.cols = 0;
+						continue;
+					}
+					d.cols = floor((d.maxBB.x - d.minBB.x + doorXsep) / doorCellW);
+					d.xoffset = ((d.maxBB.x - d.minBB.x) - d.cols * doorCellW) / 2;
+
+					// If no doors, just output the segment
+					if (d.cols == 0) {
+						glm::vec3 va(d.minBB.x, d.minBB.y, 0.0);
+						glm::vec3 vb(d.maxBB.x, d.minBB.y, 0.0);
+						glm::vec3 vc(d.maxBB.x, d.maxBB.y, 0.0);
+						glm::vec3 vd(d.minBB.x, d.maxBB.y, 0.0);
+						writeFace(va, vb, vc, vd, norm, false);
+						continue;
+					}
+
+					for (int c = 0; c < d.cols; c++) {
+						float dMinX = d.minBB.x + d.xoffset + doorXoff + c * doorCellW;
+						float dMaxX = dMinX + doorW;
+
+						// If first door, write spacing to left side of section
+						if (c == 0) {
+							glm::vec3 va(d.minBB.x, d.minBB.y, 0.0);
+							glm::vec3 vb(dMinX, d.minBB.y, 0.0);
+							glm::vec3 vc(dMinX, d.maxBB.y, 0.0);
+							glm::vec3 vd(d.minBB.x, d.maxBB.y, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						// Otherwise write the spacing before this door
+						} else {
+							glm::vec3 va(dMinX - doorXsep, d.minBB.y, 0.0);
+							glm::vec3 vb(dMinX, d.minBB.y, 0.0);
+							glm::vec3 vc(dMinX, d.maxBB.y, 0.0);
+							glm::vec3 vd(dMinX - doorXsep, d.maxBB.y, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						}
+
+						// Write the door face
+						glm::vec3 va(dMinX, d.minBB.y, 0.0);
+						glm::vec3 vb(dMaxX, d.minBB.y, 0.0);
+						glm::vec3 vc(dMaxX, d.maxBB.y, 0.0);
+						glm::vec3 vd(dMinX, d.maxBB.y, 0.0);
+						writeFace(va, vb, vc, vd, norm, true);
+
+						// If last door, also write spacing to right side of section
+						if (c+1 == d.cols) {
+							glm::vec3 va(dMaxX, d.minBB.y, 0.0);
+							glm::vec3 vb(d.maxBB.x, d.minBB.y, 0.0);
+							glm::vec3 vc(d.maxBB.x, d.maxBB.y, 0.0);
+							glm::vec3 vd(dMaxX, d.maxBB.y, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						}
+					}
+				}
+
+				// Get the tallest window section
+				int maxH = -1;
+				for (int si = 0; si < winSections.size(); ++si) {
+					if (maxH < 0 || (winSections[si].maxBB.y - winSections[si].minBB.y) >
+						(winSections[maxH].maxBB.y - winSections[maxH].minBB.y))
+						maxH = si;
+				}
+				// Center windows vertically on tallest window section
+				winSections[maxH].rows = floor(
+					(winSections[maxH].maxBB.y - winSections[maxH].minBB.y) / winCellH);
+				winSections[maxH].yoffset =
+					((winSections[maxH].maxBB.y - winSections[maxH].minBB.y) -
+					winSections[maxH].rows * winCellH) / 2;
+
+				// Output all windows
+				for (int si = 0; si < winSections.size(); si++) {
+					WinSection& s = winSections[si];
+					// Center rows horizontally on all sections
+					s.cols = floor((s.maxBB.x - s.minBB.x + winXsep) / winCellW);
+					s.xoffset = ((s.maxBB.x - s.minBB.x) - s.cols * winCellW) / 2;
+					// Align columns with columns on the tallest section
+					if (si != maxH) {
+						const WinSection& sm = winSections[maxH];
+						s.yoffset = ceil((s.minBB.y - sm.minBB.y - sm.yoffset) / winCellH)
+							* winCellH + sm.minBB.y + sm.yoffset - s.minBB.y;
+						s.rows = floor((s.maxBB.y - s.minBB.y - s.yoffset) / winCellH);
+					}
+
+					// If no rows or columns, just output the segment
+					if (s.rows == 0 || s.cols == 0) {
+						glm::vec3 va(s.minBB.x, s.minBB.y, 0.0);
+						glm::vec3 vb(s.maxBB.x, s.minBB.y, 0.0);
+						glm::vec3 vc(s.maxBB.x, s.maxBB.y, 0.0);
+						glm::vec3 vd(s.minBB.x, s.maxBB.y, 0.0);
+						writeFace(va, vb, vc, vd, norm, false);
+						continue;
+					}
+
+					for (int r = 0; r < s.rows; r++) {
+						float wMinY = s.minBB.y + s.yoffset + winYoff + r * winCellH;
+						float wMaxY = wMinY + winH;
+
+						// If first row, write spacing below all windows
+						if (r == 0) {
+							glm::vec3 va(s.minBB.x, s.minBB.y, 0.0);
+							glm::vec3 vb(s.maxBB.x, s.minBB.y, 0.0);
+							glm::vec3 vc(s.maxBB.x, wMinY, 0.0);
+							glm::vec3 vd(s.minBB.x, wMinY, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						// Otherwise, write spacing between rows
+						} else {
+							glm::vec3 va(s.minBB.x, wMinY - winYsep, 0.0);
+							glm::vec3 vb(s.maxBB.x, wMinY - winYsep, 0.0);
+							glm::vec3 vc(s.maxBB.x, wMinY, 0.0);
+							glm::vec3 vd(s.minBB.x, wMinY, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						}
+
+						// Write all windows in this row
+						for (int c = 0; c < s.cols; c++) {
+							float wMinX = s.minBB.x + s.xoffset + winXoff + c * winCellW;
+							float wMaxX = wMinX + winW;
+
+							// If first window, write spacing to the left of the row
+							if (c == 0) {
+								glm::vec3 va(s.minBB.x, wMinY, 0.0);
+								glm::vec3 vb(wMinX, wMinY, 0.0);
+								glm::vec3 vc(wMinX, wMaxY, 0.0);
+								glm::vec3 vd(s.minBB.x, wMaxY, 0.0);
+								writeFace(va, vb, vc, vd, norm, false);
+							// Otherwise, write spacing between columns
+							} else {
+								glm::vec3 va(wMinX - winXsep, wMinY, 0.0);
+								glm::vec3 vb(wMinX, wMinY, 0.0);
+								glm::vec3 vc(wMinX, wMaxY, 0.0);
+								glm::vec3 vd(wMinX - winXsep, wMaxY, 0.0);
+								writeFace(va, vb, vc, vd, norm, false);
+							}
+
+							// Write the window in this row/column
+							glm::vec3 va(wMinX, wMinY, 0.0);
+							glm::vec3 vb(wMaxX, wMinY, 0.0);
+							glm::vec3 vc(wMaxX, wMaxY, 0.0);
+							glm::vec3 vd(wMinX, wMaxY, 0.0);
+							writeFace(va, vb, vc, vd, norm, true);
+
+							// If the last window, write spacing to the right of the row
+							if (c+1 == s.cols) {
+								glm::vec3 va(wMaxX, wMinY, 0.0);
+								glm::vec3 vb(s.maxBB.x, wMinY, 0.0);
+								glm::vec3 vc(s.maxBB.x, wMaxY, 0.0);
+								glm::vec3 vd(wMaxX, wMaxY, 0.0);
+								writeFace(va, vb, vc, vd, norm, false);
+							}
+						}
+
+						// If last row, write spacing above all windows
+						if (r+1 == s.rows) {
+							glm::vec3 va(s.minBB.x, wMaxY, 0.0);
+							glm::vec3 vb(s.maxBB.x, wMaxY, 0.0);
+							glm::vec3 vc(s.maxBB.x, s.maxBB.y, 0.0);
+							glm::vec3 vd(s.minBB.x, s.maxBB.y, 0.0);
+							writeFace(va, vb, vc, vd, norm, false);
+						}
+					}
+				}
+
+			// If not valid DN output, just use existing facade
+			} else {
+
+				// Add each triangle
+				for (auto f : facadeInfo[fi].faceIDs) {
+					// Write positions + background color
+					glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
+					glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
+					glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
+					objFile << "v " << va.x << " " << va.y << " " << va.z << " "
+						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+					objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
+						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+					objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
+						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+
+					// Write normals
+					glm::vec3 na = normBuf[indexBuf[3 * f + 0]];
+					glm::vec3 nb = normBuf[indexBuf[3 * f + 1]];
+					glm::vec3 nc = normBuf[indexBuf[3 * f + 2]];
+					objFile << "vn " << na.x << " " << na.y << " " << na.z << endl;
+					objFile << "vn " << nb.x << " " << nb.y << " " << nb.z << endl;
+					objFile << "vn " << nc.x << " " << nc.y << " " << nc.z << endl;
+
+					// Write indices
+					objFile << "f " << vcount+1 << "//" << vcount+1 << " "
+						<< vcount+2 << "//" << vcount+2 << " "
+						<< vcount+3 << "//" << vcount+3 << endl;
+					vcount += 3;
+				}
+			}
+
+		// If no DN metadata, just use existing facade
+		} else {
+			// Load one view of this facade (pick the first one we have)
+			fs::path facadePath = modelDir / "facade" / fiStr /
+				(*(facadeInfo[fi].inSats.begin()) + "_ps.png");
+			cv::Mat facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			if (!facadeImage.data) {
+				cout << "Facade " << fiStr << " texture " << facadePath.filename()
+					<< " missing!" << endl;
+				continue;
+			}
+
+			// Separate alpha channel
+			cv::Mat aMask(facadeImage.size(), CV_8UC1);
+			cv::mixChannels(vector<cv::Mat>{ facadeImage }, vector<cv::Mat>{ aMask }, { 3, 0 });
+
+			// Get mean color
+			cv::Scalar meanCol = cv::mean(facadeImage, aMask);
+			glm::vec3 drawCol(meanCol[2] / 255.0, meanCol[1] / 255.0, meanCol[0] / 255.0);
+
+			// Add each triangle
+			for (auto f : facadeInfo[fi].faceIDs) {
+				// Write positions + mean color
+				glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
+				glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
+				glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
+				objFile << "v " << va.x << " " << va.y << " " << va.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+				objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+
+				// Write normals
+				glm::vec3 na = normBuf[indexBuf[3 * f + 0]];
+				glm::vec3 nb = normBuf[indexBuf[3 * f + 1]];
+				glm::vec3 nc = normBuf[indexBuf[3 * f + 2]];
+				objFile << "vn " << na.x << " " << na.y << " " << na.z << endl;
+				objFile << "vn " << nb.x << " " << nb.y << " " << nb.z << endl;
+				objFile << "vn " << nc.x << " " << nc.y << " " << nc.z << endl;
+
+				// Write indices
+				objFile << "f " << vcount+1 << "//" << vcount+1 << " "
+					<< vcount+2 << "//" << vcount+2 << " "
+					<< vcount+3 << "//" << vcount+3 << endl;
+				vcount += 3;
+			}
+		}
 	}
 }
 
