@@ -775,6 +775,168 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 				<< indexBuf[f + 2] + 1 << "/"
 				<< indexBuf[f + 2] + 1 << endl;
 	}
+
+
+	// Vertex shader for comparison images
+	static const string vsh_str2 = R"(
+		#version 460
+
+		layout (location = 0) in vec2 pos;
+		layout (location = 1) in vec2 tc;
+
+		smooth out vec2 geoTC;
+
+		void main() {
+			gl_Position = vec4(pos, 0.0, 1.0);
+			geoTC = tc;
+		})";
+	// Geometry shader
+	static const string gsh_str2 = R"(
+		#version 460
+
+		layout (triangles) in;
+		layout (triangle_strip, max_vertices = 3) out;
+
+		smooth in vec2 geoTC[];
+
+		smooth out vec2 fragTC;
+
+		void main() {
+			// Skip triangles without valid coords
+			if (gl_in[0].gl_Position.x < -0.5 || gl_in[0].gl_Position.y < -0.5 ||
+				gl_in[1].gl_Position.x < -0.5 || gl_in[1].gl_Position.y < -0.5 ||
+				gl_in[2].gl_Position.x < -0.5 || gl_in[2].gl_Position.y < -0.5) return;
+
+			gl_Position = vec4(gl_in[0].gl_Position.xy * vec2(2) - vec2(1), 0.0, 1.0);
+			fragTC = geoTC[0];
+			EmitVertex();
+
+			gl_Position = vec4(gl_in[1].gl_Position.xy * vec2(2) - vec2(1), 0.0, 1.0);
+			fragTC = geoTC[1];
+			EmitVertex();
+
+			gl_Position = vec4(gl_in[2].gl_Position.xy * vec2(2) - vec2(1), 0.0, 1.0);
+			fragTC = geoTC[2];
+			EmitVertex();
+
+			EndPrimitive();
+		})";
+	// Fragment shader
+	static const string fsh_str2 = R"(
+		#version 460
+
+		smooth in vec2 fragTC;
+
+		out vec4 outCol;
+
+		uniform sampler2D texSampler;
+
+		void main() {
+			outCol = texture(texSampler, fragTC);
+		})";
+
+	// Compile and link shaders
+	shaders.clear();
+	shaders.push_back(ctx.compileShader(GL_VERTEX_SHADER, vsh_str2));
+	shaders.push_back(ctx.compileShader(GL_GEOMETRY_SHADER, gsh_str2));
+	shaders.push_back(ctx.compileShader(GL_FRAGMENT_SHADER, fsh_str2));
+	GLuint program2 = ctx.linkProgram(shaders);
+	glUseProgram(program2);
+
+	// Upload synth atlas to OpenGL
+	cv::flip(atlasImage, atlasImage, 0);
+	GLuint synthAtlasTex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, synthAtlasTex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlasImage.cols, atlasImage.rows, 0,
+		GL_BGRA, GL_UNSIGNED_BYTE, atlasImage.data);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	// Comparison images directory
+	fs::path compareDir = outDir / "compare";
+	if (fs::exists(compareDir))
+		fs::remove_all(compareDir);
+	fs::create_directory(compareDir);
+
+	// Iterate over all satellite images
+	for (auto& si : satInfo) {
+		// Load the satellite image
+		fs::path satPath = modelDir / "sat" / (si.first + "_ps.png");
+		cv::Mat satImg = cv::imread(satPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+
+		// Resize framebuffer texture
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, satImg.cols, satImg.rows, 0,
+			GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glViewport(0, 0, satImg.cols, satImg.rows);
+
+		// Load the satellite atlas
+		fs::path satAtlasPath = modelDir / "atlas" / (si.first + "_ps.png");
+		cv::Mat satAtlasImg = cv::imread(satAtlasPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		// Upload to OpenGL
+		cv::flip(satAtlasImg, satAtlasImg, 0);
+		GLuint satAtlasTex = ctx.genTexture();
+		glBindTexture(GL_TEXTURE_2D, satAtlasTex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, satAtlasImg.cols, satAtlasImg.rows, 0,
+			GL_BGRA, GL_UNSIGNED_BYTE, satAtlasImg.data);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+		// Upload satellite TCs
+		GLuint sbuf = ctx.genBuffer();
+		glBindBuffer(GL_ARRAY_BUFFER, sbuf);
+		glBufferData(GL_ARRAY_BUFFER, satTCBufs[si.first].size() * sizeof(satTCBufs[si.first][0]),
+			satTCBufs[si.first].data(), GL_STATIC_DRAW);
+
+		// Create vertex array object
+		GLuint vao2 = ctx.genVAO();
+		glBindVertexArray(vao2);
+		glBindBuffer(GL_ARRAY_BUFFER, sbuf);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+		glBindBuffer(GL_ARRAY_BUFFER, atbuf);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+
+		// Draw the building
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawElements(GL_TRIANGLES, indexBuf.size(), GL_UNSIGNED_INT, 0);
+
+		// Download the rendering
+		cv::Mat satRenderImg(satImg.rows, satImg.cols, CV_8UC3);
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glGetTexImage(GL_TEXTURE_2D, 0, GL_BGR, GL_UNSIGNED_BYTE, satRenderImg.data);
+		cv::flip(satRenderImg, satRenderImg, 0);
+
+		// Switch to synthesized facades
+		glBindTexture(GL_TEXTURE_2D, synthAtlasTex);
+		// Draw the building
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawElements(GL_TRIANGLES, indexBuf.size(), GL_UNSIGNED_INT, 0);
+
+		// Download the rendering
+		cv::Mat synthRenderImg(satImg.rows, satImg.cols, CV_8UC3);
+		glBindTexture(GL_TEXTURE_2D, fbtex);
+		glGetTexImage(GL_TEXTURE_2D, 0, GL_BGR, GL_UNSIGNED_BYTE, synthRenderImg.data);
+		cv::flip(synthRenderImg, synthRenderImg, 0);
+
+		// Combine sat image with renderings
+		cv::Mat combineImg(satImg.rows, 3 * satImg.cols, CV_8UC3);
+		satImg.copyTo(combineImg(cv::Rect(0, 0, satImg.cols, satImg.rows)));
+		satRenderImg.copyTo(combineImg(cv::Rect(satImg.cols, 0, satImg.cols, satImg.rows)));
+		synthRenderImg.copyTo(combineImg(cv::Rect(2 * satImg.cols, 0, satImg.cols, satImg.rows)));
+		// Save the combined image
+		fs::path combinePath = compareDir / (si.first + ".png");
+		cv::imwrite(combinePath.string(), combineImg);
+
+		// Clean up OGL data
+		ctx.deleteTexture(satAtlasTex);
+		ctx.deleteBuffer(sbuf);
+		ctx.deleteVAO(vao2);
+	}
 }
 
 // Synthesize facade geometry using deep network parameters
