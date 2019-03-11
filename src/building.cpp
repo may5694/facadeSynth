@@ -942,11 +942,23 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 // Synthesize facade geometry using deep network parameters
 void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> facades) {
 
-	// Create output OBJ file
+	// Create output OBJ and MTL files
 	fs::path outDir = outputDir / region / model / cluster;
 	fs::path objPath = outDir / (cluster + "_synth_geometry.obj");
+	fs::path mtlPath = objPath; mtlPath.replace_extension(".mtl");
 	ofstream objFile(objPath);
+	ofstream mtlFile(mtlPath);
 	int vcount = 0;
+	int ncount = 0;
+
+	objFile << "mtllib " << mtlPath.filename().string() << endl;
+
+	// Write up and down normals for window recesses
+//	objFile << "vn 0.0 0.0 1.0" << endl;
+//	objFile << "vn 0.0 0.0 -1.0" << endl;
+	int upNidx = 1;
+	int downNidx = 2;
+	ncount += 2;
 
 	// Iterate over all facades
 	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
@@ -969,16 +981,16 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			string si = meta["satellite"].GetString();
 			bool valid = meta["valid"].GetBool();
 			glm::vec3 bg_color;
-			bg_color.x = meta["bg_color"][0].GetDouble() / 255;
+			bg_color.x = meta["bg_color"][2].GetDouble() / 255;
 			bg_color.y = meta["bg_color"][1].GetDouble() / 255;
-			bg_color.z = meta["bg_color"][2].GetDouble() / 255;
+			bg_color.z = meta["bg_color"][0].GetDouble() / 255;
 
 			// If valid DN output, add windows and doors
 			if (valid) {
 				glm::vec3 window_color;
-				window_color.x = meta["window_color"][0].GetDouble() / 255;
+				window_color.x = meta["window_color"][2].GetDouble() / 255;
 				window_color.y = meta["window_color"][1].GetDouble() / 255;
-				window_color.z = meta["window_color"][2].GetDouble() / 255;
+				window_color.z = meta["window_color"][0].GetDouble() / 255;
 
 				// Read window parameters
 				int rows = meta["paras"]["rows"].GetInt();
@@ -1186,6 +1198,14 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					vcount += 4;
 				};
 
+				// Add materials for window and background
+				mtlFile << "newmtl " << fiStr << "_bg" << endl;
+				mtlFile << "Kd " << bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+				mtlFile << "newmtl " << fiStr << "_window" << endl;
+				mtlFile << "Kd " << window_color.x << " " << window_color.y << " " << window_color.z << endl;
+
+				objFile << "usemtl " << fiStr << "_bg" << endl;
+
 				// Center doors on each door section
 				for (auto& d : doorSections) {
 					if (d.maxBB.y - d.minBB.y < doorH) {
@@ -1226,11 +1246,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						}
 
 						// Write the door face
+						objFile << "usemtl " << fiStr << "_window" << endl;
 						glm::vec3 va(dMinX, d.minBB.y, 0.0);
 						glm::vec3 vb(dMaxX, d.minBB.y, 0.0);
 						glm::vec3 vc(dMaxX, d.maxBB.y, 0.0);
 						glm::vec3 vd(dMinX, d.maxBB.y, 0.0);
 						writeFace(va, vb, vc, vd, norm, true);
+						objFile << "usemtl " << fiStr << "_bg" << endl;
 
 						// If last door, also write spacing to right side of section
 						if (c+1 == d.cols) {
@@ -1323,11 +1345,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							}
 
 							// Write the window in this row/column
+							objFile << "usemtl " << fiStr << "_window" << endl;
 							glm::vec3 va(wMinX, wMinY, 0.0);
 							glm::vec3 vb(wMaxX, wMinY, 0.0);
 							glm::vec3 vc(wMaxX, wMaxY, 0.0);
 							glm::vec3 vd(wMinX, wMaxY, 0.0);
 							writeFace(va, vb, vc, vd, norm, true);
+							objFile << "usemtl " << fiStr << "_bg" << endl;
 
 							// If the last window, write spacing to the right of the row
 							if (c+1 == s.cols) {
@@ -1352,6 +1376,12 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 			// If not valid DN output, just use existing facade
 			} else {
+				// Add material for this facade color
+				mtlFile << "newmtl " << fiStr << "_bg" << endl;
+				mtlFile << "Kd " << bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+
+				// Use this material
+				objFile << "usemtl " << fiStr << "_bg" << endl;
 
 				// Add each triangle
 				for (auto f : facadeInfo[fi].faceIDs) {
@@ -1401,6 +1431,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			// Get mean color
 			cv::Scalar meanCol = cv::mean(facadeImage, aMask);
 			glm::vec3 drawCol(meanCol[2] / 255.0, meanCol[1] / 255.0, meanCol[0] / 255.0);
+
+			// Add material for this facade color
+			mtlFile << "newmtl " << fiStr << "_bg" << endl;
+			mtlFile << "Kd " << drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+
+			// Use this material
+			objFile << "usemtl " << fiStr << "_bg" << endl;
 
 			// Add each triangle
 			for (auto f : facadeInfo[fi].faceIDs) {
