@@ -25,6 +25,8 @@ struct Options {
 	bool noop;				// Do nothing (used for --help)
 	fs::path configPath;	// Path to config file
 	bool generate;			// Generate data from input directories
+	bool selected;			// Process selected clusters (from config) and gen comparisons
+	map<string, string> selectedSats;		// Best views for selected clusters
 
 	// Config file options
 	fs::path clusterDir;	// Dir containing clusters in a region
@@ -38,7 +40,8 @@ struct Options {
 		all(false),
 		noop(false),
 		configPath("config.json"),
-		generate(false) {}
+		generate(false),
+		selected(false) {}
 };
 
 // Functions
@@ -120,6 +123,56 @@ int main(int argc, char** argv) {
 			Building::combineOutput(opts.outputDir, opts.region, opts.model, bldgs);
 		}
 
+		// Generate comparison images
+		if (opts.selected) {
+			cout << "Generating comparison images..." << endl;
+
+			// Create selected directory
+			fs::path selDir = opts.outputDir / opts.region / opts.model / "selected";
+			if (fs::exists(selDir))
+				fs::remove_all(selDir);
+			fs::create_directory(selDir);
+
+			// Loop over all selected clusters
+			auto si = opts.selectedSats.begin();
+			while (si != opts.selectedSats.end()) {
+
+				// Combine 10 clusters at a time
+				cv::Mat cmpImg(0, 0, CV_8UC3);
+				string cmpName;
+
+				for (int i = 0; i < 10 && si != opts.selectedSats.end(); ++si, ++i) {
+					fs::path siPath = opts.outputDir / opts.region / opts.model / si->first /
+						"compare" / (si->second + ".png");
+					cv::Mat siImg = cv::imread(siPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+					if (!siImg.data) {
+						cout << "  Couldn't load " << siPath << endl;
+						i--; continue;
+					}
+
+					// Get amount to expand image by
+					int y = cmpImg.rows;
+					int bottom = siImg.rows;
+					int left = 0, right = 0;
+					if (siImg.cols > cmpImg.cols) {
+						left = int((siImg.cols - cmpImg.cols + 1) / 2.0);
+						right = int((siImg.cols - cmpImg.cols) / 2.0);
+					}
+					cv::copyMakeBorder(cmpImg, cmpImg, 0, bottom, left, right,
+						cv::BORDER_CONSTANT, cv::Scalar::all(0));
+
+					// Copy new image to comparison image
+					siImg.copyTo(cmpImg(cv::Rect((cmpImg.cols - siImg.cols) / 2, y,
+						siImg.cols, siImg.rows)));
+					cmpName.append(si->first + ".");
+				}
+
+				// Save the combined image
+				fs::path cmpPath = selDir / (cmpName + "png");
+				cv::imwrite(cmpPath.string(), cmpImg);
+			}
+		}
+
 	// Handle any exceptions
 	} catch (const exception& e) {
 		cerr << e.what() << endl;
@@ -137,6 +190,7 @@ Options parseCmd(int argc, char** argv) {
 		out << "    --config <path>      Specify config file to use" << endl;
 		out << "    -g, --generate       Generate cluster data from input" << endl;
 		out << "                           directories." << endl;
+		out << "    -s, --selected       Process selected clusters from config" << endl;
 		out << "    -h, --help           Display this help and exit" << endl;
 		out << "    -m, --model <name>   Which model to process" << endl;
 		out << "                           Defaults to cgv_r" << endl;
@@ -187,6 +241,10 @@ Options parseCmd(int argc, char** argv) {
 			// Generate cluster data from input directories
 			} else if (arg == "-g" || arg == "--generate") {
 				opts.generate = true;
+
+			} else if (arg == "-s" || arg == "--selected") {
+				opts.selected = true;
+				opts.all = false;
 
 			// Ask for help
 			} else if (arg == "-h" || arg == "--help") {
@@ -244,6 +302,31 @@ void readConfig(Options& opts) {
 			["satelliteDir"].GetString();
 		opts.dataDir = config["dataDir"].GetString();
 		opts.outputDir = config["outputDir"].GetString();
+
+		// Read selected clusters if specified in options
+		if (opts.selected) {
+			if (!config["regions"][opts.region.c_str()]
+				["models"][opts.model.c_str()].HasMember("selected") ||
+				config["regions"][opts.region.c_str()]
+				["models"][opts.model.c_str()]["selected"].Size() == 0)
+				throw runtime_error("No selected clusters for region \"" + opts.region +
+					"\", model \"" + opts.model + "\" in config file!");
+
+			// Read all selected clusters
+			for (auto& v : config["regions"][opts.region.c_str()]
+				["models"][opts.model.c_str()]["selected"].GetArray()) {
+				string clusterStr; {
+					stringstream ss;
+					ss << setw(4) << setfill('0') << v["id"].GetInt();
+					clusterStr = ss.str();
+				}
+				string clusterSat = v["sat"].GetString();
+
+				// Add to cluster set and best viewing satellite
+				opts.clusters.insert(clusterStr);
+				opts.selectedSats[clusterStr] = clusterSat;
+			}
+		}
 
 	// Add message to errors while reading
 	} catch (const exception& e) {
