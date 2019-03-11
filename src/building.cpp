@@ -1067,7 +1067,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					glm::vec2 maxBB;
 					int rows;
 					int cols;
-					float xoffset;
+					float xscale;
 					float yoffset;
 				};
 				vector<WinSection> winSections;
@@ -1283,8 +1283,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				for (int si = 0; si < winSections.size(); si++) {
 					WinSection& s = winSections[si];
 					// Center rows horizontally on all sections
-					s.cols = floor((s.maxBB.x - s.minBB.x + winXsep / 2) / winCellW);
-					s.xoffset = ((s.maxBB.x - s.minBB.x) - s.cols * winCellW) / 2;
+					s.cols = max(round((s.maxBB.x - s.minBB.x) / winCellW - (1.0 - relativeWidth)),
+						0.0);
+					s.xscale = (s.cols == 0) ? 1.0 : (s.maxBB.x - s.minBB.x) / (s.cols * winCellW);
 					// Align columns with columns on the tallest section
 					if (si != maxH) {
 						const WinSection& sm = winSections[maxH];
@@ -1325,7 +1326,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 						// Write all windows in this row
 						for (int c = 0; c < s.cols; c++) {
-							float wMinX = s.minBB.x + s.xoffset + winXoff + c * winCellW;
+							float wXsep = winCellW * s.xscale - winW;
+							float wMinX = s.minBB.x + wXsep / 2 + c * winCellW * s.xscale;
 							float wMaxX = wMinX + winW;
 
 							// If first window, write spacing to the left of the row
@@ -1337,10 +1339,10 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 								writeFace(va, vb, vc, vd, norm, false);
 							// Otherwise, write spacing between columns
 							} else {
-								glm::vec3 va(wMinX - winXsep, wMinY, 0.0);
+								glm::vec3 va(wMinX - wXsep, wMinY, 0.0);
 								glm::vec3 vb(wMinX, wMinY, 0.0);
 								glm::vec3 vc(wMinX, wMaxY, 0.0);
-								glm::vec3 vd(wMinX - winXsep, wMaxY, 0.0);
+								glm::vec3 vd(wMinX - wXsep, wMaxY, 0.0);
 								writeFace(va, vb, vc, vd, norm, false);
 							}
 

@@ -110,7 +110,8 @@ int main(int argc, char** argv) {
 
 				// Synthesize facades
 				cout << "    Synthesizing facades..." << endl;
-				b.synthFacadeTextures(opts.outputDir, facadeMeta);
+//				b.synthFacadeTextures(opts.outputDir, facadeMeta);
+				b.synthFacadeGeometry(opts.outputDir, facadeMeta);
 			} catch (const exception& e) {
 				cout << "Failed to process cluster " << b.getCluster() << ": " << e.what() << endl;
 				continue;
