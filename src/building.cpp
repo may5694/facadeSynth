@@ -950,15 +950,145 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	ofstream mtlFile(mtlPath);
 	int vcount = 0;
 	int ncount = 0;
+	float recess = 0.0;		// Amount to recess windows and doors into the building
 
 	objFile << "mtllib " << mtlPath.filename().string() << endl;
 
 	// Write up and down normals for window recesses
-//	objFile << "vn 0.0 0.0 1.0" << endl;
-//	objFile << "vn 0.0 0.0 -1.0" << endl;
-	int upNidx = 1;
-	int downNidx = 2;
-	ncount += 2;
+	objFile << "vn 0.0 0.0 1.0" << endl;
+	objFile << "vn 0.0 0.0 -1.0" << endl;
+	int normUIdx = ++ncount;	// Index of up normal
+	int normDIdx = ++ncount;	// Index of down normal
+
+	// Store facade parameters
+	struct FacadeParams {
+		bool valid;
+		glm::vec3 bg_color;
+		glm::vec3 window_color;
+		int rows;
+		int cols;
+		float relativeWidth;
+		float relativeHeight;
+		bool hasDoors;
+		int doors;
+		float relativeDWidth;
+		float relativeDHeight;
+	};
+	map<size_t, FacadeParams> facadeParams;
+
+	// Group facades with similar parameters together
+	struct FacadeGroup {
+		vector<size_t> facades;		// Which facades are in the group
+		float avgHeight;
+		float avgRows;
+		float avgCols;
+		float avgRelWidth;
+		float avgRelHeight;
+		bool hasDoors;
+		float avgDoors;
+		float avgRelDWidth;
+		float avgRelDHeight;
+	};
+	vector<FacadeGroup> facadeGroups;
+	vector<int> whichGroup(facadeInfo.size(), -1);
+
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		if (!facades.count(fi)) continue;
+
+		// Read metadata
+		ifstream metaFile(facades[fi]);
+		rj::IStreamWrapper isw(metaFile);
+		rj::Document meta;
+		meta.ParseStream(isw);
+
+		// Store parameters from metadata
+		FacadeParams fp;
+		fp.valid = meta["valid"].GetBool();
+		fp.bg_color.x = meta["bg_color"][2].GetDouble() / 255;
+		fp.bg_color.y = meta["bg_color"][1].GetDouble() / 255;
+		fp.bg_color.z = meta["bg_color"][0].GetDouble() / 255;
+
+		if (fp.valid) {
+			fp.window_color.x = meta["window_color"][2].GetDouble() / 255;
+			fp.window_color.y = meta["window_color"][1].GetDouble() / 255;
+			fp.window_color.z = meta["window_color"][0].GetDouble() / 255;
+			fp.rows = meta["paras"]["rows"].GetInt();
+			fp.cols = meta["paras"]["cols"].GetInt();
+			fp.relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
+			fp.relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
+			fp.hasDoors = meta["paras"].HasMember("doors");
+			fp.doors = 0;
+			fp.relativeDWidth = 0.0;
+			fp.relativeDHeight = 0.0;
+			if (fp.hasDoors) {
+				fp.doors = meta["paras"]["doors"].GetInt();
+				fp.relativeDWidth = meta["paras"]["relativeDWidth"].GetFloat();
+				fp.relativeDHeight = meta["paras"]["relativeDHeight"].GetFloat();
+			}
+		}
+
+		// Store parameters for this facade
+		facadeParams[fi] = fp;
+
+		if (!fp.valid) continue;
+
+		// Find a group for this facade
+		bool inGroup = false;
+		for (int g = 0; g < facadeGroups.size(); g++) {
+			FacadeGroup& fg = facadeGroups[g];
+			float sz = fg.facades.size();
+			// Add to group if height is similar, same style, and similar params
+			if (abs(facadeInfo[fi].height - fg.avgHeight / sz) < 1.0 &&
+				fp.hasDoors == fg.hasDoors &&
+				abs(fp.rows - fg.avgRows / sz) < 2 &&
+				abs(fp.cols - fg.avgCols / sz) < 4) {
+
+				fg.facades.push_back(fi);
+				fg.avgHeight += facadeInfo[fi].height;
+				fg.avgRows += fp.rows;
+				fg.avgCols += fp.cols;
+				fg.avgRelWidth += fp.relativeWidth;
+				fg.avgRelHeight += fp.relativeHeight;
+				fg.avgDoors += fp.doors;
+				fg.avgRelDWidth += fp.relativeDWidth;
+				fg.avgRelDHeight += fp.relativeDHeight;
+
+				whichGroup[fi] = g;
+				inGroup = true;
+				break;
+			}
+		}
+		// If no group matched, add a new group
+		if (!inGroup) {
+			FacadeGroup fg;
+
+			fg.facades.push_back(fi);
+			fg.avgHeight = facadeInfo[fi].height;
+			fg.avgRows = fp.rows;
+			fg.avgCols = fp.cols;
+			fg.avgRelWidth = fp.relativeWidth;
+			fg.avgRelHeight = fp.relativeHeight;
+			fg.hasDoors = fp.hasDoors;
+			fg.avgDoors = fp.doors;
+			fg.avgRelDWidth = fp.relativeDWidth;
+			fg.avgRelDHeight = fp.relativeDHeight;
+
+			whichGroup[fi] = facadeGroups.size();
+			facadeGroups.push_back(fg);
+		}
+	}
+	// Average all group params
+	for (auto& fg : facadeGroups) {
+		float sz = fg.facades.size();
+		fg.avgHeight /= sz;
+		fg.avgRows /= sz;
+		fg.avgCols /= sz;
+		fg.avgRelWidth /= sz;
+		fg.avgRelHeight /= sz;
+		fg.avgDoors /= sz;
+		fg.avgRelDWidth /= sz;
+		fg.avgRelDHeight /= sz;
+	}
 
 	// Iterate over all facades
 	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
@@ -969,57 +1099,27 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		}
 
 		// If we have DN metadata for this facade, synthesize a facade with windows
-		if (facades.count(fi)) {
-
-			// Read metadata
-			ifstream metaFile(facades[fi]);
-			rj::IStreamWrapper isw(metaFile);
-			rj::Document meta;
-			meta.ParseStream(isw);
-
-			// Store values from metadata
-			string si = meta["satellite"].GetString();
-			bool valid = meta["valid"].GetBool();
-			glm::vec3 bg_color;
-			bg_color.x = meta["bg_color"][2].GetDouble() / 255;
-			bg_color.y = meta["bg_color"][1].GetDouble() / 255;
-			bg_color.z = meta["bg_color"][0].GetDouble() / 255;
+		if (facadeParams.count(fi)) {
+			const FacadeParams& fp = facadeParams[fi];
 
 			// If valid DN output, add windows and doors
-			if (valid) {
-				glm::vec3 window_color;
-				window_color.x = meta["window_color"][2].GetDouble() / 255;
-				window_color.y = meta["window_color"][1].GetDouble() / 255;
-				window_color.z = meta["window_color"][0].GetDouble() / 255;
-
-				// Read window parameters
-				int rows = meta["paras"]["rows"].GetInt();
-				int cols = meta["paras"]["cols"].GetInt();
-				float relativeWidth = meta["paras"]["relativeWidth"].GetFloat();
-				float relativeHeight = meta["paras"]["relativeHeight"].GetFloat();
-				// Read door parameters if we have doors
-				bool hasDoors = meta["paras"].HasMember("doors");
-				int doors = 0;
-				float relativeDWidth = 0.0, relativeDHeight = 0.0;
-				if (hasDoors) {
-					doors = meta["paras"]["doors"].GetInt();
-					relativeDWidth = meta["paras"]["relativeDWidth"].GetFloat();
-					relativeDHeight = meta["paras"]["relativeDHeight"].GetFloat();
-				}
+			if (fp.valid) {
+				assert(whichGroup[fi] >= 0);
+				const FacadeGroup& fg = facadeGroups[whichGroup[fi]];
 
 				// Get sizes and spacing
-				float winCellW = 30.0 / cols;
-				float winCellH = 30.0 / rows;
-				float winW = winCellW * relativeWidth;
-				float winH = winCellH * relativeHeight;
-				float winXsep = winCellW * (1.0 - relativeWidth);
-				float winYsep = winCellH * (1.0 - relativeHeight);
+				float winCellW = 30.0 / fg.avgCols;
+				float winCellH = 30.0 / fg.avgRows;
+				float winW = winCellW * fg.avgRelWidth;
+				float winH = winCellH * fg.avgRelHeight;
+				float winXsep = winCellW * (1.0 - fg.avgRelWidth);
+				float winYsep = winCellH * (1.0 - fg.avgRelHeight);
 				float winXoff = winXsep / 2.0;
 				float winYoff = winYsep / 2.0;
-				float doorCellW = 30.0 / max(doors, 1);
-				float doorW = doorCellW * relativeDWidth;
-				float doorH = 30.0 * relativeDHeight;
-				float doorXsep = doorCellW * (1.0 - relativeDWidth);
+				float doorCellW = 30.0 / max(fg.avgDoors, 1.0f);
+				float doorW = doorCellW * fg.avgRelDWidth;
+				float doorH = 30.0 * fg.avgRelDHeight;
+				float doorXsep = doorCellW * (1.0 - fg.avgRelDWidth);
 				float doorXoff = doorXsep / 2.0;
 
 				// Reorient facade for easier window placement
@@ -1121,7 +1221,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					float xoffset;
 				};
 				vector<DoorSection> doorSections;
-				if (hasDoors) {
+				if (fg.hasDoors) {
 					// Iterate over window sections
 					for (auto wi = winSections.begin(); wi != winSections.end();) {
 						// Win section is entirely below door line
@@ -1160,10 +1260,10 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 				// Method to write a face to the OBJ file
 				auto writeFace = [&](glm::vec3 va, glm::vec3 vb, glm::vec3 vc, glm::vec3 vd,
-					glm::vec3 norm, bool window) {
+					int nidx, bool window) {
 
 					// Set the color to use
-					glm::vec3 color = window ? window_color : bg_color;
+					glm::vec3 color = window ? fp.window_color : fp.bg_color;
 
 					// Transform positions
 					va = glm::vec3(invXform * glm::vec4(va, 1.0));
@@ -1181,39 +1281,47 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					objFile << "v " << vd.x << " " << vd.y << " " << vd.z << " "
 						<< color.x << " " << color.y << " " << color.z << endl;
 
-					// Write normals
-					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
-					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
-					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
-					objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
-
 					// Write indices
-					objFile << "f " << vcount+1 << "//" << vcount+1 << " "
-						<< vcount+2 << "//" << vcount+2 << " "
-						<< vcount+3 << "//" << vcount+3 << endl;
-					objFile << "f " << vcount+3 << "//" << vcount+3 << " "
-						<< vcount+4 << "//" << vcount+4 << " "
-						<< vcount+1 << "//" << vcount+1 << endl;
+					objFile << "f " << vcount+1 << "//" << nidx << " "
+						<< vcount+2 << "//" << nidx << " "
+						<< vcount+3 << "//" << nidx << endl;
+					objFile << "f " << vcount+3 << "//" << nidx << " "
+						<< vcount+4 << "//" << nidx << " "
+						<< vcount+1 << "//" << nidx << endl;
 
 					vcount += 4;
 				};
 
 				// Add materials for window and background
 				mtlFile << "newmtl " << fiStr << "_bg" << endl;
-				mtlFile << "Kd " << bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+				mtlFile << "Kd " << fp.bg_color.x << " "
+								<< fp.bg_color.y << " "
+								<< fp.bg_color.z << endl;
 				mtlFile << "newmtl " << fiStr << "_window" << endl;
-				mtlFile << "Kd " << window_color.x << " " << window_color.y << " " << window_color.z << endl;
+				mtlFile << "Kd " << fp.window_color.x << " "
+								<< fp.window_color.y << " "
+								<< fp.window_color.z << endl;
 
 				objFile << "usemtl " << fiStr << "_bg" << endl;
+
+				// Add facade normals
+				glm::vec3 normR = glm::normalize(glm::cross(glm::vec3(0.0, 0.0, 1.0), norm));
+				glm::vec3 normL = -normR;
+				objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+				objFile << "vn " << normR.x << " " << normR.y << " " << normR.z << endl;
+				objFile << "vn " << normL.x << " " << normL.y << " " << normL.z << endl;
+				int normIdx = ++ncount;
+				int normRIdx = ++ncount;
+				int normLIdx = ++ncount;
 
 				// Center doors on each door section
 				for (auto& d : doorSections) {
 					if (d.maxBB.y - d.minBB.y < doorH) {
 						d.cols = 0;
-						continue;
+					} else {
+						d.cols = floor((d.maxBB.x - d.minBB.x + doorXsep / 2) / doorCellW);
+						d.xoffset = ((d.maxBB.x - d.minBB.x) - d.cols * doorCellW) / 2;
 					}
-					d.cols = floor((d.maxBB.x - d.minBB.x + doorXsep / 2) / doorCellW);
-					d.xoffset = ((d.maxBB.x - d.minBB.x) - d.cols * doorCellW) / 2;
 
 					// If no doors, just output the segment
 					if (d.cols == 0) {
@@ -1221,7 +1329,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						glm::vec3 vb(d.maxBB.x, d.minBB.y, 0.0);
 						glm::vec3 vc(d.maxBB.x, d.maxBB.y, 0.0);
 						glm::vec3 vd(d.minBB.x, d.maxBB.y, 0.0);
-						writeFace(va, vb, vc, vd, norm, false);
+						writeFace(va, vb, vc, vd, normIdx, false);
 						continue;
 					}
 
@@ -1235,23 +1343,34 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							glm::vec3 vb(dMinX, d.minBB.y, 0.0);
 							glm::vec3 vc(dMinX, d.maxBB.y, 0.0);
 							glm::vec3 vd(d.minBB.x, d.maxBB.y, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						// Otherwise write the spacing before this door
 						} else {
 							glm::vec3 va(dMinX - doorXsep, d.minBB.y, 0.0);
 							glm::vec3 vb(dMinX, d.minBB.y, 0.0);
 							glm::vec3 vc(dMinX, d.maxBB.y, 0.0);
 							glm::vec3 vd(dMinX - doorXsep, d.maxBB.y, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						}
 
-						// Write the door face
-						objFile << "usemtl " << fiStr << "_window" << endl;
+						// Get door vertices
 						glm::vec3 va(dMinX, d.minBB.y, 0.0);
 						glm::vec3 vb(dMaxX, d.minBB.y, 0.0);
 						glm::vec3 vc(dMaxX, d.maxBB.y, 0.0);
 						glm::vec3 vd(dMinX, d.maxBB.y, 0.0);
-						writeFace(va, vb, vc, vd, norm, true);
+						glm::vec3 va2(dMinX, d.minBB.y, -recess);
+						glm::vec3 vb2(dMaxX, d.minBB.y, -recess);
+						glm::vec3 vc2(dMaxX, d.maxBB.y, -recess);
+						glm::vec3 vd2(dMinX, d.maxBB.y, -recess);
+						// Write the door boundaries
+						if (recess > 0.0) {
+							writeFace(vd2, vc2, vc, vd, normDIdx, false);
+							writeFace(va, va2, vd2, vd, normRIdx, false);
+							writeFace(vb2, vb, vc, vc2, normLIdx, false);
+						}
+						// Write the door face
+						objFile << "usemtl " << fiStr << "_window" << endl;
+						writeFace(va2, vb2, vc2, vd2, normIdx, true);
 						objFile << "usemtl " << fiStr << "_bg" << endl;
 
 						// If last door, also write spacing to right side of section
@@ -1260,10 +1379,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							glm::vec3 vb(d.maxBB.x, d.minBB.y, 0.0);
 							glm::vec3 vc(d.maxBB.x, d.maxBB.y, 0.0);
 							glm::vec3 vd(dMaxX, d.maxBB.y, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						}
 					}
 				}
+
+				// Skip if all window sections became door sections
+				if (winSections.empty()) continue;
 
 				// Get the tallest window section
 				int maxH = -1;
@@ -1283,8 +1405,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				for (int si = 0; si < winSections.size(); si++) {
 					WinSection& s = winSections[si];
 					// Center rows horizontally on all sections
-					s.cols = max(round((s.maxBB.x - s.minBB.x) / winCellW - (1.0 - relativeWidth)),
-						0.0);
+					s.cols = floor((s.maxBB.x - s.minBB.x) / winCellW);
 					s.xscale = (s.cols == 0) ? 1.0 : (s.maxBB.x - s.minBB.x) / (s.cols * winCellW);
 					// Align columns with columns on the tallest section
 					if (si != maxH) {
@@ -1295,12 +1416,12 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					}
 
 					// If no rows or columns, just output the segment
-					if (s.rows == 0 || s.cols == 0) {
+					if (s.rows <= 0 || s.cols <= 0) {
 						glm::vec3 va(s.minBB.x, s.minBB.y, 0.0);
 						glm::vec3 vb(s.maxBB.x, s.minBB.y, 0.0);
 						glm::vec3 vc(s.maxBB.x, s.maxBB.y, 0.0);
 						glm::vec3 vd(s.minBB.x, s.maxBB.y, 0.0);
-						writeFace(va, vb, vc, vd, norm, false);
+						writeFace(va, vb, vc, vd, normIdx, false);
 						continue;
 					}
 
@@ -1314,14 +1435,14 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							glm::vec3 vb(s.maxBB.x, s.minBB.y, 0.0);
 							glm::vec3 vc(s.maxBB.x, wMinY, 0.0);
 							glm::vec3 vd(s.minBB.x, wMinY, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						// Otherwise, write spacing between rows
 						} else {
 							glm::vec3 va(s.minBB.x, wMinY - winYsep, 0.0);
 							glm::vec3 vb(s.maxBB.x, wMinY - winYsep, 0.0);
 							glm::vec3 vc(s.maxBB.x, wMinY, 0.0);
 							glm::vec3 vd(s.minBB.x, wMinY, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						}
 
 						// Write all windows in this row
@@ -1336,23 +1457,35 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 								glm::vec3 vb(wMinX, wMinY, 0.0);
 								glm::vec3 vc(wMinX, wMaxY, 0.0);
 								glm::vec3 vd(s.minBB.x, wMaxY, 0.0);
-								writeFace(va, vb, vc, vd, norm, false);
+								writeFace(va, vb, vc, vd, normIdx, false);
 							// Otherwise, write spacing between columns
 							} else {
 								glm::vec3 va(wMinX - wXsep, wMinY, 0.0);
 								glm::vec3 vb(wMinX, wMinY, 0.0);
 								glm::vec3 vc(wMinX, wMaxY, 0.0);
 								glm::vec3 vd(wMinX - wXsep, wMaxY, 0.0);
-								writeFace(va, vb, vc, vd, norm, false);
+								writeFace(va, vb, vc, vd, normIdx, false);
 							}
 
-							// Write the window in this row/column
-							objFile << "usemtl " << fiStr << "_window" << endl;
+							// Get the window vertices
 							glm::vec3 va(wMinX, wMinY, 0.0);
 							glm::vec3 vb(wMaxX, wMinY, 0.0);
 							glm::vec3 vc(wMaxX, wMaxY, 0.0);
 							glm::vec3 vd(wMinX, wMaxY, 0.0);
-							writeFace(va, vb, vc, vd, norm, true);
+							glm::vec3 va2(wMinX, wMinY, -recess);
+							glm::vec3 vb2(wMaxX, wMinY, -recess);
+							glm::vec3 vc2(wMaxX, wMaxY, -recess);
+							glm::vec3 vd2(wMinX, wMaxY, -recess);
+							// Write the window boundaries
+							if (recess > 0.0) {
+								writeFace(va, vb, vb2, va2, normUIdx, false);
+								writeFace(vd2, vc2, vc, vd, normDIdx, false);
+								writeFace(va, va2, vd2, vd, normRIdx, false);
+								writeFace(vb2, vb, vc, vc2, normLIdx, false);
+							}
+							// Write the window in this row/column
+							objFile << "usemtl " << fiStr << "_window" << endl;
+							writeFace(va2, vb2, vc2, vd2, normIdx, true);
 							objFile << "usemtl " << fiStr << "_bg" << endl;
 
 							// If the last window, write spacing to the right of the row
@@ -1361,7 +1494,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 								glm::vec3 vb(s.maxBB.x, wMinY, 0.0);
 								glm::vec3 vc(s.maxBB.x, wMaxY, 0.0);
 								glm::vec3 vd(wMaxX, wMaxY, 0.0);
-								writeFace(va, vb, vc, vd, norm, false);
+								writeFace(va, vb, vc, vd, normIdx, false);
 							}
 						}
 
@@ -1371,7 +1504,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							glm::vec3 vb(s.maxBB.x, wMaxY, 0.0);
 							glm::vec3 vc(s.maxBB.x, s.maxBB.y, 0.0);
 							glm::vec3 vd(s.minBB.x, s.maxBB.y, 0.0);
-							writeFace(va, vb, vc, vd, norm, false);
+							writeFace(va, vb, vc, vd, normIdx, false);
 						}
 					}
 				}
@@ -1380,10 +1513,17 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			} else {
 				// Add material for this facade color
 				mtlFile << "newmtl " << fiStr << "_bg" << endl;
-				mtlFile << "Kd " << bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+				mtlFile << "Kd " << fp.bg_color.x << " "
+								<< fp.bg_color.y << " "
+								<< fp.bg_color.z << endl;
 
 				// Use this material
 				objFile << "usemtl " << fiStr << "_bg" << endl;
+
+				// Write the normal
+				glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
+				objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+				int normIdx = ++ncount;
 
 				// Add each triangle
 				for (auto f : facadeInfo[fi].faceIDs) {
@@ -1392,24 +1532,16 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
 					glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
 					objFile << "v " << va.x << " " << va.y << " " << va.z << " "
-						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+						<< fp.bg_color.x << " " << fp.bg_color.y << " " << fp.bg_color.z << endl;
 					objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
-						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
+						<< fp.bg_color.x << " " << fp.bg_color.y << " " << fp.bg_color.z << endl;
 					objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
-						<< bg_color.x << " " << bg_color.y << " " << bg_color.z << endl;
-
-					// Write normals
-					glm::vec3 na = normBuf[indexBuf[3 * f + 0]];
-					glm::vec3 nb = normBuf[indexBuf[3 * f + 1]];
-					glm::vec3 nc = normBuf[indexBuf[3 * f + 2]];
-					objFile << "vn " << na.x << " " << na.y << " " << na.z << endl;
-					objFile << "vn " << nb.x << " " << nb.y << " " << nb.z << endl;
-					objFile << "vn " << nc.x << " " << nc.y << " " << nc.z << endl;
+						<< fp.bg_color.x << " " << fp.bg_color.y << " " << fp.bg_color.z << endl;
 
 					// Write indices
-					objFile << "f " << vcount+1 << "//" << vcount+1 << " "
-						<< vcount+2 << "//" << vcount+2 << " "
-						<< vcount+3 << "//" << vcount+3 << endl;
+					objFile << "f " << vcount+1 << "//" << normIdx << " "
+						<< vcount+2 << "//" << normIdx << " "
+						<< vcount+3 << "//" << normIdx << endl;
 					vcount += 3;
 				}
 			}
@@ -1441,6 +1573,11 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			// Use this material
 			objFile << "usemtl " << fiStr << "_bg" << endl;
 
+			// Write the normal
+			glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
+			objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+			int normIdx = ++ncount;
+
 			// Add each triangle
 			for (auto f : facadeInfo[fi].faceIDs) {
 				// Write positions + mean color
@@ -1454,18 +1591,10 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
 					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
 
-				// Write normals
-				glm::vec3 na = normBuf[indexBuf[3 * f + 0]];
-				glm::vec3 nb = normBuf[indexBuf[3 * f + 1]];
-				glm::vec3 nc = normBuf[indexBuf[3 * f + 2]];
-				objFile << "vn " << na.x << " " << na.y << " " << na.z << endl;
-				objFile << "vn " << nb.x << " " << nb.y << " " << nb.z << endl;
-				objFile << "vn " << nc.x << " " << nc.y << " " << nc.z << endl;
-
 				// Write indices
-				objFile << "f " << vcount+1 << "//" << vcount+1 << " "
-					<< vcount+2 << "//" << vcount+2 << " "
-					<< vcount+3 << "//" << vcount+3 << endl;
+				objFile << "f " << vcount+1 << "//" << normIdx << " "
+					<< vcount+2 << "//" << normIdx << " "
+					<< vcount+3 << "//" << normIdx << endl;
 				vcount += 3;
 			}
 		}
