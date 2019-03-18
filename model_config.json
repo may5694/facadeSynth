@@ -1,26 +1,69 @@
 {
-	"grammar1":{
-		"model":"data/networks/lego_model_grammar1.pt",
-		"number_paras":5,
-		"rangeOfRows":[6,12],
-		"rangeOfCols":[1,12],
-		"rangeOfGrouping":[1,3]
-	},
-	"grammar2":{
-		"model":"data/networks/lego_model_grammar2.pt",
-		"number_paras":8,
-		"rangeOfRows":[6,10],
-		"rangeOfCols":[1,12],
-		"rangeOfGrouping":[1,3],
-		"rangeOfDoors":[2,6]
+	"grammars":{
+		"classifier":{
+			"model":"data/networks/lego_model_classifier.pt",
+			"number_paras":6
+		},
+		"grammar1":{
+			"model":"data/networks/lego_model_grammar1.pt",
+			"number_paras":4,
+			"rangeOfRows":[3,12],
+			"rangeOfCols":[3,12],
+			"rangeOfGrouping":[1,1],
+			"relativeWidth":[0.3, 0.9],
+			"relativeHeight":[0.3, 0.9]
+		},
+		"grammar2":{
+			"model":"data/networks/lego_model_grammar2.pt",
+			"number_paras":7,
+			"rangeOfRows":[3,12],
+			"rangeOfCols":[3,12],
+			"rangeOfGrouping":[1,1],
+			"rangeOfDoors":[2,6],
+			"relativeWidth":[0.3, 0.9],
+			"relativeHeight":[0.3, 0.9],
+			"relativeDWidth":[0.7, 0.9],
+			"relativeDHeight":[0.2, 0.4]
+		},
+		"grammar3":{
+			"model":"data/networks/lego_model_grammar3.pt",
+			"number_paras":2,
+			"rangeOfCols":[3,12],
+			"relativeWidth":[0.3, 0.9]
+		},
+		"grammar4":{
+			"model":"data/networks/lego_model_grammar4.pt",
+			"number_paras":5,
+			"rangeOfCols":[3,12],
+			"rangeOfDoors":[2,6],
+			"relativeWidth":[0.3, 0.9],
+			"relativeDWidth":[0.7, 0.9],
+			"relativeDHeight":[0.2, 0.4]
+		},
+		"grammar5":{
+			"model":"data/networks/lego_model_grammar5.pt",
+			"number_paras":2,
+			"rangeOfRows":[3,12],
+			"relativeHeight":[0.3, 0.9]
+		},
+		"grammar6":{
+			"model":"data/networks/lego_model_grammar6.pt",
+			"number_paras":5,
+			"rangeOfRows":[3,12],
+			"rangeOfDoors":[2,6],
+			"relativeHeight":[0.3, 0.9],
+			"relativeDWidth":[0.7, 0.9],
+			"relativeDHeight":[0.2, 0.4]
+		}
 	},
 	"facadesFolder":"../facades",
 	"chipsFolder":"../chips",
 	"segsFolder":"../segs",
-	"segsColorFolder":"../segsColor",
-	"dnnsFolder":"../dnns",
-	"thresholds":"../thresholds.txt",
-	"grounds":"../grounds.txt",
+	"resizesFolder":"../resizes",
+	"dilatesFolder":"../dilates",
+	"alignsFolder":"../aligns",
+	"dnnsInFolder":"../dnnsIn",
+	"dnnsOutFolder":"../dnnsOut",
 	"debug":false,
 	"defaultSize":[224, 224],
 	"targetChipSize":[30.0, 30.0]

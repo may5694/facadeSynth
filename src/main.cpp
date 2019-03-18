@@ -105,8 +105,9 @@ int main(int argc, char** argv) {
 
 				// Predict facade structure using DN
 				cout << "    Predicting parameters..." << endl;
-				for (auto& fi : facadeMeta)
+				for (auto& fi : facadeMeta) {
 					dn_predict(fi.second.string(), "model_config.json");
+				}
 
 				// Synthesize facades
 				cout << "    Synthesizing facades..." << endl;
