@@ -950,8 +950,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	ofstream mtlFile(mtlPath);
 	int vcount = 0;
 	int ncount = 0;
+	int tcount = 0;
 	float recess = 0.0;		// Amount to recess windows and doors into the building
 	float g34_border = 2.0;	// Border above and below vertical windows
+
+	// Add material for texture-mapped roofs
+	mtlFile << "newmtl atlas" << endl;
+	mtlFile << "map_Kd " << cluster << "_synth_atlas.png" << endl;
 
 	objFile << "mtllib " << mtlPath.filename().string() << endl;
 
@@ -1618,8 +1623,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			mtlFile << "newmtl " << fiStr << "_bg" << endl;
 			mtlFile << "Kd " << drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
 
-			// Use this material
-			objFile << "usemtl " << fiStr << "_bg" << endl;
+			// Use texture-mapped material
+			objFile << "usemtl atlas" << endl;
 
 			// Write the normal
 			glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
@@ -1628,22 +1633,28 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 			// Add each triangle
 			for (auto f : facadeInfo[fi].faceIDs) {
-				// Write positions + mean color
+				// Write positions
 				glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
 				glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
 				glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
-				objFile << "v " << va.x << " " << va.y << " " << va.z << " "
-					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
-				objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
-					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
-				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
-					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+				objFile << "v " << va.x << " " << va.y << " " << va.z << endl;
+				objFile << "v " << vb.x << " " << vb.y << " " << vb.z << endl;
+				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << endl;
+
+				// Write texture coords
+				glm::vec2 ta = atlasTCBuf[indexBuf[3 * f + 0]];
+				glm::vec2 tb = atlasTCBuf[indexBuf[3 * f + 1]];
+				glm::vec2 tc = atlasTCBuf[indexBuf[3 * f + 2]];
+				objFile << "vt " << ta.x << " " << ta.y << endl;
+				objFile << "vt " << tb.x << " " << tb.y << endl;
+				objFile << "vt " << tc.x << " " << tc.y << endl;
 
 				// Write indices
-				objFile << "f " << vcount+1 << "//" << normIdx << " "
-					<< vcount+2 << "//" << normIdx << " "
-					<< vcount+3 << "//" << normIdx << endl;
+				objFile << "f " << vcount+1 << "/" << tcount+1 << "/" << normIdx << " "
+					<< vcount+2 << "/" << tcount+2 << "/" << normIdx << " "
+					<< vcount+3 << "/" << tcount+3 << "/" << normIdx << endl;
 				vcount += 3;
+				tcount += 3;
 			}
 		}
 	}
