@@ -2071,8 +2071,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	cv::flip(atlasImage, atlasImage, 0);
 
 	// Save to disk
-	fs::path atlasPath = outDir / (cluster + "_synth_atlas.png");
-	cv::imwrite(atlasPath.string(), atlasImage);
+	fs::path synthAtlasPath = outDir / (cluster + "_synth_atlas.png");
+	cv::imwrite(synthAtlasPath.string(), atlasImage);
 
 
 	// Output best scores texture atlas
@@ -2122,8 +2122,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	cv::flip(atlasImage, atlasImage, 0);
 
 	// Save to disk
-	atlasPath = outDir / (cluster + "_bestscores_atlas.png");
-	cv::imwrite(atlasPath.string(), atlasImage);
+	fs::path bestScoresAtlasPath = outDir / (cluster + "_bestscores_atlas.png");
+	cv::imwrite(bestScoresAtlasPath.string(), atlasImage);
 
 
 	// Output histeq best scores texture atlas
@@ -2173,8 +2173,55 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	cv::flip(atlasImage, atlasImage, 0);
 
 	// Save to disk
-	atlasPath = outDir / (cluster + "_histeq_atlas.png");
-	cv::imwrite(atlasPath.string(), atlasImage);
+	fs::path histeqAtlasPath = outDir / (cluster + "_histeq_atlas.png");
+	cv::imwrite(histeqAtlasPath.string(), atlasImage);
+
+
+	// Output textured synth model
+	fs::path objPath2 = outDir / (cluster + "_synth_texture.obj");
+	fs::path mtlPath2 = objPath2; mtlPath2.replace_extension(".mtl");
+	ofstream objFile2(objPath2);
+	ofstream mtlFile2(mtlPath2);
+
+	// Create atlas materials
+	mtlFile2 << "newmtl synth_atlas" << endl;
+	mtlFile2 << "map_Kd " << synthAtlasPath.filename().string() << endl;
+	mtlFile2 << "newmtl bestscores_atlas" << endl;
+	mtlFile2 << "map_Kd " << bestScoresAtlasPath.filename().string() << endl;
+	mtlFile2 << "newmtl histeq_atlas" << endl;
+	mtlFile2 << "map_Kd " << histeqAtlasPath.filename().string() << endl;
+
+	// Use synth material
+	objFile2 << "mtllib " << mtlPath2.filename().string() << endl;
+	objFile2 << "usemtl synth_atlas" << endl;
+	objFile2 << endl;
+
+	// Write all vertex positions
+	for (auto v : posBuf)
+		objFile2 << "v " << v.x << " " << v.y << " " << v.z << endl;
+	objFile2 << endl;
+	// Write all vertex normals
+	for (auto n : normBuf)
+		objFile2 << "vn " << n.x << " " << n.y << " " << n.z << endl;
+	objFile2 << endl;
+	// Write all texture coordinates
+	for (auto t : atlasTCBuf)
+		objFile2 << "vt " << t.x << " " << t.y << endl;
+	objFile2 << endl;
+
+	// Write all faces
+	for (size_t f = 0; f < indexBuf.size(); f += 3) {
+		objFile2 << "f ";
+		objFile2 << indexBuf[f + 0] + 1 << "/"
+				 << indexBuf[f + 0] + 1 << "/"
+				 << indexBuf[f + 0] + 1 << " ";
+		objFile2 << indexBuf[f + 1] + 1 << "/"
+				 << indexBuf[f + 1] + 1 << "/"
+				 << indexBuf[f + 1] + 1 << " ";
+		objFile2 << indexBuf[f + 2] + 1 << "/"
+				 << indexBuf[f + 2] + 1 << "/"
+				 << indexBuf[f + 2] + 1 << endl;
+	}
 }
 
 // Combine .obj outputs of specified clusters, using synthesized texture atlases
