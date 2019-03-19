@@ -136,6 +136,8 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	// Map facade IDs to output metadata paths
 	map<size_t, fs::path> facadeMap;
 
+	bool debug = false;
+
 	// Create output directories
 	fs::path outDir = outputDir / region / model / cluster;
 	if (!fs::exists(outDir))
@@ -156,6 +158,13 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	if (fs::exists(metaDir))
 		fs::remove_all(metaDir);
 	fs::create_directory(metaDir);
+
+	fs::path debugDir = outDir / "debug";
+	if (debug) {
+		if (fs::exists(debugDir))
+			fs::remove_all(debugDir);
+		fs::create_directory(debugDir);
+	}
 
 	int clusterInt = stoi(cluster);
 
@@ -265,14 +274,14 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			// Calculate brightness
 			cv::Mat vBright = vImage.clone();
 			vBright.forEach<float>([](float& p, const int* position) -> void {
-				p = min(p + 0.5, 1.0);
+				p = min(p * 2.0, 1.0);
 			});
 			cv::boxFilter(vBright, vBright, -1, ks);
 
 			// Calculate score
-			float w1 = 0.35;		// Shadow
-			float w2 = 0.2;			// Brightness
-			float w3 = 0.45;		// Area
+			float w1 = 0.40;		// Shadow
+			float w2 = 0.25;		// Brightness
+			float w3 = 0.35;		// Area
 			cv::Mat score = unOcc.mul(aImage).mul(
 				w1 * (1.0 - inShadow) + w2 * vBright + w3 * areas[si] / maxArea);
 			float avgScore = cv::mean(score, aMask)[0];
@@ -282,6 +291,32 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 				maxScoreIdx = si;
 				maxScoreImage = bgrImage;
 				maxScoreRect = inRect;
+			}
+
+			if (debug) {
+				// Save every facade with its score
+				fs::path debugPath;
+				{ stringstream ss;
+					ss << cluster << "_" << fiStr << "_"
+						<< fixed << setprecision(4) << avgScore << ".png";
+				debugPath = debugDir / ss.str(); }
+				cv::Mat debugImg;
+				bgrImage.convertTo(debugImg, CV_8U, 255.0);
+				cv::imwrite(debugPath.string(), debugImg);
+
+				{ stringstream ss;
+					ss << cluster << "_" << fiStr << "_s_"
+						<< fixed << setprecision(4) << avgScore << ".png";
+				debugPath = debugDir / ss.str(); }
+				inShadow.convertTo(debugImg, CV_8U, 255.0);
+				cv::imwrite(debugPath.string(), debugImg);
+
+				{ stringstream ss;
+					ss << cluster << "_" << fiStr << "_b_"
+						<< fixed << setprecision(4) << avgScore << ".png";
+				debugPath = debugDir / ss.str(); }
+				vBright.convertTo(debugImg, CV_8U, 255.0);
+				cv::imwrite(debugPath.string(), debugImg);
 			}
 		}
 
