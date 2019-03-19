@@ -334,4 +334,51 @@ cv::Rect findLargestRectangle(cv::Mat image) {
 	return maxRect;
 }
 
+// Implements histogram equalization using a mask image
+cv::Mat equalizeHistMask(cv::Mat src, cv::Mat mask) {
+	// Make sure all images are the same size and 8-bit grayscale
+	assert(src.size() == mask.size() && src.type() == mask.type() && src.type() == CV_8UC1);
+
+	uint32_t nzc = 0;
+
+	// Get the histogram
+	vector<uint32_t> hist(256, 0);
+	for (int r = 0; r < src.rows; r++) {
+		uint8_t* sp = src.ptr(r);
+		uint8_t* mp = mask.ptr(r);
+		for (int c = 0; c < src.cols; c++) {
+			if (mp[c]) {
+				hist[sp[c]]++;
+				nzc++;
+			}
+		}
+	}
+
+	float scale = 255.0 / nzc;
+	uint32_t sum = 0;
+
+	// Get lookup table
+	vector<uint8_t> lut(256, 0);
+	for (int i = 0; i < hist.size(); i++) {
+		sum += hist[i];
+		lut[i] = round(sum * scale);
+	}
+	lut[0] = 0;
+
+	// Get output image
+	cv::Mat dst = cv::Mat::zeros(src.size(), src.type());
+	for (int r = 0; r < src.rows; r++) {
+		uint8_t* sp = src.ptr(r);
+		uint8_t* dp = dst.ptr(r);
+		uint8_t* mp = mask.ptr(r);
+		for (int c = 0; c < src.cols; c++) {
+			if (mp[c])
+				dp[c] = lut[sp[c]];
+		}
+	}
+
+	return dst;
 }
+
+}
+

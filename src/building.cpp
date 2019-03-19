@@ -146,14 +146,18 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 	if (fs::exists(imageDir))
 		fs::remove_all(imageDir);
 	fs::create_directory(imageDir);
+	fs::path imageHisteqDir = outDir / "image-histeq";
+	if (fs::exists(imageHisteqDir))
+		fs::remove_all(imageHisteqDir);
+	fs::create_directory(imageHisteqDir);
 	fs::path chipDir = outDir / "chip";
 	if (fs::exists(chipDir))
 		fs::remove_all(chipDir);
 	fs::create_directory(chipDir);
-	fs::path histeqDir = outDir / "histeq";
-	if (fs::exists(histeqDir))
-		fs::remove_all(histeqDir);
-	fs::create_directory(histeqDir);
+	fs::path chipHisteqDir = outDir / "chip-histeq";
+	if (fs::exists(chipHisteqDir))
+		fs::remove_all(chipHisteqDir);
+	fs::create_directory(chipHisteqDir);
 	fs::path metaDir = outDir / "metadata";
 	if (fs::exists(metaDir))
 		fs::remove_all(metaDir);
@@ -175,9 +179,6 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			stringstream ss; ss << setw(4) << setfill('0') << fi;
 			fiStr = ss.str();
 		}
-
-		// Skip roofs
-		if (finfo.roof) continue;
 
 		// Get projected area for each satellite
 		map<string, float> areas;
@@ -341,13 +342,32 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		cv::Mat histeqImage;
 		cv::cvtColor(hsvImage, histeqImage, cv::COLOR_HSV2BGR);
 		// Save histeq version
-		fs::path histeqPath = histeqDir / imageName;
+		fs::path histeqPath = chipHisteqDir / imageName;
 		cv::imwrite(histeqPath.string(), histeqImage);
 
 		// Copy original to output image dir
 		fs::path bestOrigPath = modelDir / "facade" / fiStr / (maxScoreIdx + "_ps.png");
 		fs::path bestCopyPath = imageDir / (cluster + "_" + fiStr + ".png");
 		fs::copy_file(bestOrigPath, bestCopyPath);
+
+		// Create histeq version
+		cv::Mat bestBGRAImage = cv::imread(bestCopyPath.string(), CV_LOAD_IMAGE_UNCHANGED);
+		cv::Mat bestBGRImage(bestBGRAImage.size(), CV_8UC3);
+		cv::Mat bestAImage(bestBGRAImage.size(), CV_8UC1);
+		cv::mixChannels(vector<cv::Mat>{ bestBGRAImage },
+			vector<cv::Mat>{ bestBGRImage, bestAImage }, { 0, 0, 1, 1, 2, 2, 3, 3 });
+		cv::Mat bestHSVImage;
+		cv::cvtColor(bestBGRImage, bestHSVImage, cv::COLOR_BGR2HSV);
+		cv::Mat bestVImage(bestHSVImage.size(), CV_8UC1);
+		cv::mixChannels(vector<cv::Mat>{ bestHSVImage }, vector<cv::Mat>{ bestVImage }, { 2, 0 });
+		bestVImage = util::equalizeHistMask(bestVImage, bestAImage);
+		cv::mixChannels(vector<cv::Mat>{ bestVImage }, vector<cv::Mat> { bestHSVImage }, { 0, 2 });
+		cv::cvtColor(bestHSVImage, bestBGRImage, cv::COLOR_HSV2BGR);
+		cv::mixChannels(vector<cv::Mat>{ bestBGRImage, bestAImage },
+			vector<cv::Mat>{ bestBGRAImage }, { 0, 0, 1, 1, 2, 2, 3, 3 });
+		// Save histeq version
+		fs::path bestHisteqPath = imageHisteqDir / (cluster + "_" + fiStr + ".png");
+		cv::imwrite(bestHisteqPath.string(), bestBGRAImage);
 
 		// Create JSON metadata
 		rj::Document meta;
@@ -358,6 +378,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 		meta.AddMember("model", rj::StringRef(model.c_str()), alloc);
 		meta.AddMember("facade", rj::Value().SetUint(fi), alloc);
 		meta.AddMember("satellite", rj::StringRef(maxScoreIdx.c_str()), alloc);
+		meta.AddMember("roof", rj::Value().SetBool(finfo.roof), alloc);
 		meta.AddMember("crop", rj::Value().SetArray(), alloc);
 		meta["crop"].PushBack(maxScoreRect.x, alloc);
 		meta["crop"].PushBack(maxScoreRect.y, alloc);
@@ -370,6 +391,7 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			&& (maxScoreRect.y + maxScoreRect.height == finfo.size.y)), alloc);
 		meta.AddMember("score", rj::Value().SetFloat(maxScore), alloc);
 		meta.AddMember("imagename", rj::Value().SetString(chipPath.string().c_str(), alloc).Move(), alloc);
+
 		// Write to disk
 		fs::path metaPath; {
 			stringstream ss;
@@ -1003,6 +1025,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 	// Store facade parameters
 	struct FacadeParams {
+		bool roof;
+		string imagename;
 		bool valid;
 		glm::vec2 chip_size;
 		glm::vec3 bg_color;
@@ -1037,6 +1061,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	vector<int> whichGroup(facadeInfo.size(), -1);
 
 	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		// Skip if no metadata on this facade
 		if (!facades.count(fi)) continue;
 
 		// Read metadata
@@ -1047,10 +1072,18 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 		// Store parameters from metadata
 		FacadeParams fp;
-		fp.valid = meta["valid"].GetBool();
-		fp.bg_color.x = meta["bg_color"][2].GetDouble() / 255;
-		fp.bg_color.y = meta["bg_color"][1].GetDouble() / 255;
-		fp.bg_color.z = meta["bg_color"][0].GetDouble() / 255;
+		fp.roof = meta["roof"].GetBool();
+		fp.imagename = meta["imagename"].GetString();
+
+		if (meta.HasMember("valid")) {
+			fp.valid = meta["valid"].GetBool();
+			fp.bg_color.x = meta["bg_color"][2].GetDouble() / 255;
+			fp.bg_color.y = meta["bg_color"][1].GetDouble() / 255;
+			fp.bg_color.z = meta["bg_color"][0].GetDouble() / 255;
+		} else {
+			fp.valid = false;
+			fp.bg_color = { 0.0, 0.0, 0.0 };
+		}
 
 		if (fp.valid) {
 			fp.chip_size.x = meta["chip_size"][0].GetDouble();
@@ -1597,6 +1630,42 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					}
 				}
 
+			// If it's a roof, add existing texture-mapped geometry
+			} else if (fp.roof) {
+				// Use texture-mapped material
+				objFile << "usemtl atlas" << endl;
+
+				// Write the normal
+				glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
+				objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+				int normIdx = ++ncount;
+
+				// Add each triangle
+				for (auto f : facadeInfo[fi].faceIDs) {
+					// Write positions
+					glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
+					glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
+					glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
+					objFile << "v " << va.x << " " << va.y << " " << va.z << endl;
+					objFile << "v " << vb.x << " " << vb.y << " " << vb.z << endl;
+					objFile << "v " << vc.x << " " << vc.y << " " << vc.z << endl;
+
+					// Write texture coords
+					glm::vec2 ta = atlasTCBuf[indexBuf[3 * f + 0]];
+					glm::vec2 tb = atlasTCBuf[indexBuf[3 * f + 1]];
+					glm::vec2 tc = atlasTCBuf[indexBuf[3 * f + 2]];
+					objFile << "vt " << ta.x << " " << ta.y << endl;
+					objFile << "vt " << tb.x << " " << tb.y << endl;
+					objFile << "vt " << tc.x << " " << tc.y << endl;
+
+					// Write indices
+					objFile << "f " << vcount+1 << "/" << tcount+1 << "/" << normIdx << " "
+						<< vcount+2 << "/" << tcount+2 << "/" << normIdx << " "
+						<< vcount+3 << "/" << tcount+3 << "/" << normIdx << endl;
+					vcount += 3;
+					tcount += 3;
+				}
+
 			// If not valid DN output, just use existing facade
 			} else {
 				// Add material for this facade color
@@ -1659,7 +1728,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			mtlFile << "Kd " << drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
 
 			// Use texture-mapped material
-			objFile << "usemtl atlas" << endl;
+			objFile << "usemtl " << fiStr << "_bg" << endl;
 
 			// Write the normal
 			glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
@@ -1672,24 +1741,18 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
 				glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
 				glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
-				objFile << "v " << va.x << " " << va.y << " " << va.z << endl;
-				objFile << "v " << vb.x << " " << vb.y << " " << vb.z << endl;
-				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << endl;
-
-				// Write texture coords
-				glm::vec2 ta = atlasTCBuf[indexBuf[3 * f + 0]];
-				glm::vec2 tb = atlasTCBuf[indexBuf[3 * f + 1]];
-				glm::vec2 tc = atlasTCBuf[indexBuf[3 * f + 2]];
-				objFile << "vt " << ta.x << " " << ta.y << endl;
-				objFile << "vt " << tb.x << " " << tb.y << endl;
-				objFile << "vt " << tc.x << " " << tc.y << endl;
+				objFile << "v " << va.x << " " << va.y << " " << va.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+				objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
+				objFile << "v " << vc.x << " " << vc.y << " " << vc.z << " "
+					<< drawCol.x << " " << drawCol.y << " " << drawCol.z << endl;
 
 				// Write indices
-				objFile << "f " << vcount+1 << "/" << tcount+1 << "/" << normIdx << " "
-					<< vcount+2 << "/" << tcount+2 << "/" << normIdx << " "
-					<< vcount+3 << "/" << tcount+3 << "/" << normIdx << endl;
+				objFile << "f " << vcount+1 << "//" << normIdx << " "
+					<< vcount+2 << "//" << normIdx << " "
+					<< vcount+3 << "//" << normIdx << endl;
 				vcount += 3;
-				tcount += 3;
 			}
 		}
 	}

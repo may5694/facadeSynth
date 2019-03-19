@@ -106,6 +106,9 @@ int main(int argc, char** argv) {
 				// Predict facade structure using DN
 				cout << "    Predicting parameters..." << endl;
 				for (auto& fi : facadeMeta) {
+					// Don't predict roof params
+					if (b.getFacadeInfo()[fi.first].roof) continue;
+
 					dn_predict(fi.second.string(), "model_config.json");
 				}
 

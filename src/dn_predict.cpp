@@ -81,19 +81,19 @@ bool chipping(std::string metajson, std::string modeljson, cv::Mat& croppedImage
 	// first decide whether it's a valid chip
 	bool bvalid = false;
 	int type = 0;
-	if (facChip_size[0] < 30.0 && facChip_size[0] > 15.0 && facChip_size[1] < 30.0 && facChip_size[1] > 15.0 && score > 0.95) {
+	if (facChip_size[0] < 30.0 && facChip_size[0] > 15.0 && facChip_size[1] < 30.0 && facChip_size[1] > 15.0 && score > 0.85) {
 		type = 1;
 		bvalid = true;
 	}
-	else if (facChip_size[0] > 30.0 && facChip_size[1] < 30.0 && facChip_size[1] > 12.9 && score > 0.95) {
+	else if (facChip_size[0] > 30.0 && facChip_size[1] < 30.0 && facChip_size[1] > 12.9 && score > 0.85) {
 		type = 2;
 		bvalid = true;
 	}
-	else if (facChip_size[0] < 30.0 && facChip_size[0] > 12.9 && facChip_size[1] > 30.0 && score > 0.95) {
+	else if (facChip_size[0] < 30.0 && facChip_size[0] > 12.9 && facChip_size[1] > 30.0 && score > 0.85) {
 		type = 3;
 		bvalid = true;
 	}
-	else if (facChip_size[0] > 30.0 && facChip_size[1] > 30.0 && score > 0.85) {
+	else if (facChip_size[0] > 30.0 && facChip_size[1] > 30.0 && score > 0.70) {
 		type = 4;
 		bvalid = true;
 	}

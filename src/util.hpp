@@ -93,6 +93,9 @@ private:
 // Returns the largest rectangle inscribed within regions of all non-zero pixels
 cv::Rect findLargestRectangle(cv::Mat image);
 
+// Histogram equalization with a mask image
+cv::Mat equalizeHistMask(cv::Mat src, cv::Mat mask);
+
 }
 
 #endif
