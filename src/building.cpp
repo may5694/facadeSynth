@@ -999,8 +999,87 @@ void Building::synthFacadeTextures(fs::path outputDir, map<size_t, fs::path> fac
 // Synthesize facade geometry using deep network parameters
 void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> facades) {
 
-	// Create output OBJ and MTL files
+	// Initialize OpenGL
+	OpenGLContext ctx;
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+	// Create framebuffer texture
+	GLuint fbtex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	// Create framebuffer object
+	GLuint fbo = ctx.genFramebuffer();
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbtex, 0);
+
+	// Create position buffer
+	GLuint pbuf = ctx.genBuffer();
+	glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+	glBufferData(GL_ARRAY_BUFFER, 0, NULL, GL_STATIC_DRAW);
+	// Create color buffer
+	GLuint cbuf = ctx.genBuffer();
+	glBindBuffer(GL_ARRAY_BUFFER, cbuf);
+	glBufferData(GL_ARRAY_BUFFER, 0, NULL, GL_STATIC_DRAW);
+
+	// Create vertex array object
+	GLuint vao = ctx.genVAO();
+	glBindVertexArray(vao);
+	glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+	glBindBuffer(GL_ARRAY_BUFFER, cbuf);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), 0);
+
+	// Vertex shader
+	static const string vsh_str = R"(
+		#version 460
+
+		layout(location = 0) in vec2 pos;
+		layout(location = 1) in vec3 color;
+
+		smooth out vec3 fragCol;
+
+		uniform mat4 xform;
+
+		void main() {
+			gl_Position = xform * vec4(pos, 0.0, 1.0);
+			fragCol = color;
+		})";
+	// Fragment shader
+	static const string fsh_str = R"(
+		#version 460
+
+		smooth in vec3 fragCol;
+
+		out vec4 outCol;
+
+		void main() {
+			outCol = vec4(fragCol, 1.0);
+		})";
+
+	// Compile and link shaders
+	vector<GLuint> shaders;
+	shaders.push_back(ctx.compileShader(GL_VERTEX_SHADER, vsh_str));
+	shaders.push_back(ctx.compileShader(GL_FRAGMENT_SHADER, fsh_str));
+	GLuint program = ctx.linkProgram(shaders);
+	GLuint xformLoc = glGetUniformLocation(program, "xform");
+	glUseProgram(program);
+
+
 	fs::path outDir = outputDir / region / model / cluster;
+	// Create synth facade directory
+	fs::path synthDir = outDir / "synth";
+	if (fs::exists(synthDir))
+		fs::remove_all(synthDir);
+	fs::create_directory(synthDir);
+
+	// Create output OBJ and MTL files
 	fs::path objPath = outDir / (cluster + "_synth_geometry.obj");
 	fs::path mtlPath = objPath; mtlPath.replace_extension(".mtl");
 	ofstream objFile(objPath);
@@ -1183,6 +1262,34 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		if (facadeParams.count(fi)) {
 			const FacadeParams& fp = facadeParams[fi];
 
+			// Reorient facade for easier window placement
+			glm::mat4 xform(1.0);
+			glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
+			if (glm::dot(norm, { 0.0, 0.0, 1.0 }) < 1.0) {
+				glm::vec3 up(0.0, 0.0, 1.0);
+				glm::vec3 right = glm::normalize(glm::cross(up, norm));
+				up = glm::normalize(glm::cross(norm, right));
+
+				xform[0] = glm::vec4(right, 0.0f);
+				xform[1] = glm::vec4(up, 0.0f);
+				xform[2] = glm::vec4(norm, 0.0f);
+				xform = glm::transpose(xform);
+			}
+
+			// Get rotated facade offset
+			glm::vec3 minXYZ(FLT_MAX);
+			glm::vec3 maxXYZ(-FLT_MAX);
+			for (auto f : facadeInfo[fi].faceIDs) {
+				for (int vi = 0; vi < 3; vi++) {
+					glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+					minXYZ = glm::min(minXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
+					maxXYZ = glm::max(maxXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
+				}
+			}
+			maxXYZ -= minXYZ;
+			xform[3] = glm::vec4(-minXYZ, 1.0);
+			glm::mat4 invXform = glm::inverse(xform);
+
 			// If valid DN output, add windows and doors
 			if (fp.valid) {
 				assert(whichGroup[fi] >= 0);
@@ -1202,31 +1309,6 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				float doorH = fp.chip_size.y * fg.avgRelDHeight;
 				float doorXsep = doorCellW * (1.0 - fg.avgRelDWidth);
 				float doorXoff = doorXsep / 2.0;
-
-				// Reorient facade for easier window placement
-				glm::mat4 xform(1.0);
-				glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
-				if (glm::dot(norm, { 0.0, 0.0, 1.0 }) < 1.0) {
-					glm::vec3 up(0.0, 0.0, 1.0);
-					glm::vec3 right = glm::normalize(glm::cross(up, norm));
-					up = glm::normalize(glm::cross(norm, right));
-
-					xform[0] = glm::vec4(right, 0.0f);
-					xform[1] = glm::vec4(up, 0.0f);
-					xform[2] = glm::vec4(norm, 0.0f);
-					xform = glm::transpose(xform);
-				}
-
-				// Get rotated facade offset
-				glm::vec3 minXYZ(FLT_MAX);
-				for (auto f : facadeInfo[fi].faceIDs) {
-					for (int vi = 0; vi < 3; vi++) {
-						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
-						minXYZ = glm::min(minXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
-					}
-				}
-				xform[3] = glm::vec4(-minXYZ, 1.0);
-				glm::mat4 invXform = glm::inverse(xform);
 
 				// Get section boundaries along X
 				auto sepCmp = [](const float& a, const float& b) -> bool {
@@ -1339,12 +1421,31 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					}
 				}
 
+				// Position and color buffers
+				vector<glm::vec2> synthPosBuf;
+				vector<glm::vec3> synthColBuf;
+
 				// Method to write a face to the OBJ file
 				auto writeFace = [&](glm::vec3 va, glm::vec3 vb, glm::vec3 vc, glm::vec3 vd,
 					int nidx, bool window) {
 
 					// Set the color to use
 					glm::vec3 color = window ? fp.window_color : fp.bg_color;
+
+					// Add verts to position buffer
+					synthPosBuf.push_back(glm::vec2(va));
+					synthPosBuf.push_back(glm::vec2(vb));
+					synthPosBuf.push_back(glm::vec2(vc));
+					synthPosBuf.push_back(glm::vec2(vc));
+					synthPosBuf.push_back(glm::vec2(vd));
+					synthPosBuf.push_back(glm::vec2(va));
+					// Add colors to color buffer
+					synthColBuf.push_back(color);
+					synthColBuf.push_back(color);
+					synthColBuf.push_back(color);
+					synthColBuf.push_back(color);
+					synthColBuf.push_back(color);
+					synthColBuf.push_back(color);
 
 					// Transform positions
 					va = glm::vec3(invXform * glm::vec4(va, 1.0));
@@ -1630,6 +1731,45 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					}
 				}
 
+				// Upload positions and colors
+				glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+				glBufferData(GL_ARRAY_BUFFER, synthPosBuf.size() * sizeof(synthPosBuf[0]),
+					synthPosBuf.data(), GL_STATIC_DRAW);
+				glBindBuffer(GL_ARRAY_BUFFER, cbuf);
+				glBufferData(GL_ARRAY_BUFFER, synthColBuf.size() * sizeof(synthColBuf[0]),
+					synthColBuf.data(), GL_STATIC_DRAW);
+
+				// Upload xform matrix
+				glm::mat4 glXform(1.0);
+				glXform[0][0] = 2.0 / maxXYZ.x;
+				glXform[1][1] = 2.0 / maxXYZ.y;
+				glXform[3][0] = -1.0;
+				glXform[3][1] = -1.0;
+				glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(glXform));
+
+				// Resize framebuffer texture
+				glm::uvec2 synthSizePx = facadeInfo[fi].size;
+				glBindTexture(GL_TEXTURE_2D, fbtex);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, synthSizePx.x, synthSizePx.y, 0,
+					GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+				glBindTexture(GL_TEXTURE_2D, 0);
+				glViewport(0, 0, synthSizePx.x, synthSizePx.y);
+				glClear(GL_COLOR_BUFFER_BIT);
+
+				// Draw facade geometry onto texture
+				glDrawArrays(GL_TRIANGLES, 0, synthPosBuf.size());
+
+				// Download synth texture
+				cv::Mat synthImage(synthSizePx.y, synthSizePx.x, CV_8UC4);
+				glBindTexture(GL_TEXTURE_2D, fbtex);
+				glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, synthImage.data);
+				cv::flip(synthImage, synthImage, 0);
+
+				// Save to disk
+				fs::path synthPath = synthDir / (cluster + "_" + fiStr + ".png");
+				cv::imwrite(synthPath.string(), synthImage);
+
+
 			// If it's a roof, add existing texture-mapped geometry
 			} else if (fp.roof) {
 				// Use texture-mapped material
@@ -1668,6 +1808,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 			// If not valid DN output, just use existing facade
 			} else {
+
 				// Add material for this facade color
 				mtlFile << "newmtl " << fiStr << "_bg" << endl;
 				mtlFile << "Kd " << fp.bg_color.x << " "
@@ -1682,12 +1823,26 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
 				int normIdx = ++ncount;
 
+				// Position and color buffers
+				vector<glm::vec2> synthPosBuf;
+				vector<glm::vec3> synthColBuf;
+
 				// Add each triangle
 				for (auto f : facadeInfo[fi].faceIDs) {
 					// Write positions + background color
 					glm::vec3 va = posBuf[indexBuf[3 * f + 0]];
 					glm::vec3 vb = posBuf[indexBuf[3 * f + 1]];
 					glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
+
+					// Store positions in position buffer
+					synthPosBuf.push_back(xform * glm::vec4(va, 1.0));
+					synthPosBuf.push_back(xform * glm::vec4(vb, 1.0));
+					synthPosBuf.push_back(xform * glm::vec4(vc, 1.0));
+					// Store colors in color buffer
+					synthColBuf.push_back(fp.bg_color);
+					synthColBuf.push_back(fp.bg_color);
+					synthColBuf.push_back(fp.bg_color);
+
 					objFile << "v " << va.x << " " << va.y << " " << va.z << " "
 						<< fp.bg_color.x << " " << fp.bg_color.y << " " << fp.bg_color.z << endl;
 					objFile << "v " << vb.x << " " << vb.y << " " << vb.z << " "
@@ -1701,6 +1856,44 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						<< vcount+3 << "//" << normIdx << endl;
 					vcount += 3;
 				}
+
+				// Upload positions and colors
+				glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+				glBufferData(GL_ARRAY_BUFFER, synthPosBuf.size() * sizeof(synthPosBuf[0]),
+					synthPosBuf.data(), GL_STATIC_DRAW);
+				glBindBuffer(GL_ARRAY_BUFFER, cbuf);
+				glBufferData(GL_ARRAY_BUFFER, synthColBuf.size() * sizeof(synthColBuf[0]),
+					synthColBuf.data(), GL_STATIC_DRAW);
+
+				// Upload xform matrix
+				glm::mat4 glXform(1.0);
+				glXform[0][0] = 2.0 / maxXYZ.x;
+				glXform[1][1] = 2.0 / maxXYZ.y;
+				glXform[3][0] = -1.0;
+				glXform[3][1] = -1.0;
+				glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(glXform));
+
+				// Resize framebuffer texture
+				glm::uvec2 synthSizePx = facadeInfo[fi].size;
+				glBindTexture(GL_TEXTURE_2D, fbtex);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, synthSizePx.x, synthSizePx.y, 0,
+					GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+				glBindTexture(GL_TEXTURE_2D, 0);
+				glViewport(0, 0, synthSizePx.x, synthSizePx.y);
+				glClear(GL_COLOR_BUFFER_BIT);
+
+				// Draw facade geometry onto texture
+				glDrawArrays(GL_TRIANGLES, 0, synthPosBuf.size());
+
+				// Download synth texture
+				cv::Mat synthImage(synthSizePx.y, synthSizePx.x, CV_8UC4);
+				glBindTexture(GL_TEXTURE_2D, fbtex);
+				glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, synthImage.data);
+				cv::flip(synthImage, synthImage, 0);
+
+				// Save to disk
+				fs::path synthPath = synthDir / (cluster + "_" + fiStr + ".png");
+				cv::imwrite(synthPath.string(), synthImage);
 			}
 
 		// If no DN metadata, just use existing facade
