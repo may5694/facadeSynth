@@ -1949,6 +1949,232 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			}
 		}
 	}
+
+
+	// Resize framebuffer
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlasSize.x, atlasSize.y, 0,
+		GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glViewport(0, 0, atlasSize.x, atlasSize.y);
+
+	// Upload atlas texture coords
+	glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+	glBufferData(GL_ARRAY_BUFFER, atlasTCBuf.size() * sizeof(atlasTCBuf[0]),
+		atlasTCBuf.data(), GL_STATIC_DRAW);
+	// Create index buffer
+	GLuint ibuf = ctx.genBuffer();
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexBuf.size() * sizeof(indexBuf[0]),
+		indexBuf.data(), GL_STATIC_DRAW);
+
+	// Create vertex array object
+	GLuint vao2 = ctx.genVAO();
+	glBindVertexArray(vao2);
+	glBindBuffer(GL_ARRAY_BUFFER, pbuf);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibuf);
+
+	// Vertex shader
+	static const string vsh_str2 = R"(
+		#version 460
+
+		layout(location = 0) in vec2 tc;
+
+		smooth out vec2 fragTC;
+
+		uniform mat4 tcXform;
+
+		void main() {
+			gl_Position = vec4(tc * vec2(2) - vec2(1), 0.0, 1.0);
+			fragTC = vec2(tcXform * vec4(tc, 0.0, 1.0));
+		})";
+	// Fragment shader
+	static const string fsh_str2 = R"(
+		#version 460
+
+		smooth in vec2 fragTC;
+
+		out vec4 outCol;
+
+		uniform sampler2D texSampler;
+
+		void main() {
+			outCol = texture(texSampler, fragTC);
+		})";
+
+	// Compile and link shaders
+	shaders.clear();
+	shaders.push_back(ctx.compileShader(GL_VERTEX_SHADER, vsh_str2));
+	shaders.push_back(ctx.compileShader(GL_FRAGMENT_SHADER, fsh_str2));
+	GLuint program2 = ctx.linkProgram(shaders);
+	GLuint xformLoc2 = glGetUniformLocation(program2, "tcXform");
+	glUseProgram(program2);
+
+	// Create facade texture
+	GLuint facadeTex = ctx.genTexture();
+	glBindTexture(GL_TEXTURE_2D, facadeTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+
+	// Output synthetic texture atlas
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	// Iterate over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		string fiStr; {
+			stringstream ss;
+			ss << setw(4) << setfill('0') << fi;
+			fiStr = ss.str();
+		}
+
+		if (facadeParams.count(fi)) {
+			const FacadeParams& fp = facadeParams[fi];
+
+			// Load facade image
+			cv::Mat facadeImage;
+			if (fp.roof) {
+				fs::path facadePath = outDir / "image" / (cluster + "_" + fiStr + ".png");
+				facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			} else {
+				fs::path facadePath = outDir / "synth" / (cluster + "_" + fiStr + ".png");
+				facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+			}
+
+			// Upload facade texture to OpenGL
+			cv::flip(facadeImage, facadeImage, 0);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, facadeImage.cols, facadeImage.rows, 0,
+				GL_BGRA, GL_UNSIGNED_BYTE, facadeImage.data);
+
+			// Set texture coordinate transformation matrix
+			cv::Rect2f atlasBB = facadeInfo[fi].atlasBB;
+			glm::mat4 xlate(1.0);
+			xlate[3] = glm::vec4(-atlasBB.x, -atlasBB.y, 0.0, 1.0);
+			glm::mat4 scale(1.0);
+			scale[0][0] = 1.0 / atlasBB.width;
+			scale[1][1] = 1.0 / atlasBB.height;
+			glm::mat4 glXform = scale * xlate;
+			glUniformMatrix4fv(xformLoc2, 1, GL_FALSE, glm::value_ptr(glXform));
+
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+		}
+	}
+
+	// Download atlas texture
+	cv::Mat atlasImage(atlasSize.y, atlasSize.x, CV_8UC4);
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, atlasImage.data);
+	cv::flip(atlasImage, atlasImage, 0);
+
+	// Save to disk
+	fs::path atlasPath = outDir / (cluster + "_synth_atlas.png");
+	cv::imwrite(atlasPath.string(), atlasImage);
+
+
+	// Output best scores texture atlas
+	glBindTexture(GL_TEXTURE_2D, facadeTex);
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	// Iterate over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		string fiStr; {
+			stringstream ss;
+			ss << setw(4) << setfill('0') << fi;
+			fiStr = ss.str();
+		}
+
+		if (facadeParams.count(fi)) {
+			const FacadeParams& fp = facadeParams[fi];
+
+			// Load facade image
+			cv::Mat facadeImage;
+			fs::path facadePath = outDir / "image" / (cluster + "_" + fiStr + ".png");
+			facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+
+			// Upload facade texture to OpenGL
+			cv::flip(facadeImage, facadeImage, 0);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, facadeImage.cols, facadeImage.rows, 0,
+				GL_BGRA, GL_UNSIGNED_BYTE, facadeImage.data);
+
+			// Set texture coordinate transformation matrix
+			cv::Rect2f atlasBB = facadeInfo[fi].atlasBB;
+			glm::mat4 xlate(1.0);
+			xlate[3] = glm::vec4(-atlasBB.x, -atlasBB.y, 0.0, 1.0);
+			glm::mat4 scale(1.0);
+			scale[0][0] = 1.0 / atlasBB.width;
+			scale[1][1] = 1.0 / atlasBB.height;
+			glm::mat4 glXform = scale * xlate;
+			glUniformMatrix4fv(xformLoc2, 1, GL_FALSE, glm::value_ptr(glXform));
+
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+		}
+	}
+
+	// Download atlas texture
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, atlasImage.data);
+	cv::flip(atlasImage, atlasImage, 0);
+
+	// Save to disk
+	atlasPath = outDir / (cluster + "_bestscores_atlas.png");
+	cv::imwrite(atlasPath.string(), atlasImage);
+
+
+	// Output histeq best scores texture atlas
+	glBindTexture(GL_TEXTURE_2D, facadeTex);
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	// Iterate over all facades
+	for (size_t fi = 0; fi < facadeInfo.size(); fi++) {
+		string fiStr; {
+			stringstream ss;
+			ss << setw(4) << setfill('0') << fi;
+			fiStr = ss.str();
+		}
+
+		if (facadeParams.count(fi)) {
+			const FacadeParams& fp = facadeParams[fi];
+
+			// Load facade image
+			cv::Mat facadeImage;
+			fs::path facadePath = outDir / "image-histeq" / (cluster + "_" + fiStr + ".png");
+			facadeImage = cv::imread(facadePath.string(), CV_LOAD_IMAGE_UNCHANGED);
+
+			// Upload facade texture to OpenGL
+			cv::flip(facadeImage, facadeImage, 0);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, facadeImage.cols, facadeImage.rows, 0,
+				GL_BGRA, GL_UNSIGNED_BYTE, facadeImage.data);
+
+			// Set texture coordinate transformation matrix
+			cv::Rect2f atlasBB = facadeInfo[fi].atlasBB;
+			glm::mat4 xlate(1.0);
+			xlate[3] = glm::vec4(-atlasBB.x, -atlasBB.y, 0.0, 1.0);
+			glm::mat4 scale(1.0);
+			scale[0][0] = 1.0 / atlasBB.width;
+			scale[1][1] = 1.0 / atlasBB.height;
+			glm::mat4 glXform = scale * xlate;
+			glUniformMatrix4fv(xformLoc2, 1, GL_FALSE, glm::value_ptr(glXform));
+
+			// Draw each face in this facade group
+			for (auto f : facadeInfo[fi].faceIDs)
+				glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)(3 * f * sizeof(glm::uint)));
+		}
+	}
+
+	// Download atlas texture
+	glBindTexture(GL_TEXTURE_2D, fbtex);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, atlasImage.data);
+	cv::flip(atlasImage, atlasImage, 0);
+
+	// Save to disk
+	atlasPath = outDir / (cluster + "_histeq_atlas.png");
+	cv::imwrite(atlasPath.string(), atlasImage);
 }
 
 // Combine .obj outputs of specified clusters, using synthesized texture atlases
