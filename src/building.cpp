@@ -1,3 +1,4 @@
+#include <functional>
 #include <glm/gtc/type_ptr.hpp>
 #include <rapidjson/document.h>
 #include <rapidjson/istreamwrapper.h>
@@ -517,32 +518,59 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 	int normUIdx = ++ncount;	// Index of up normal
 	int normDIdx = ++ncount;	// Index of down normal
 
+	// Vertical sections in which windows are placed
+	struct WinSection {
+		glm::vec2 minBB;		// Minimum rectified 2D coords of section
+		glm::vec2 maxBB;		// Maximum rectified 2D coords of section
+		int rows;				// Number of rows of windows
+		int cols;				// Number of columns of windows
+		float xscale;			// Horizontal scale factor for window spacing
+		float yoffset;			// Vertical offset to align rows
+	};
+
 	// Store facade parameters
 	struct FacadeParams {
-		bool roof;
-		string imagename;
-		bool valid;
-		glm::vec2 chip_size;
-		glm::vec3 bg_color;
-		glm::vec3 window_color;
-		int grammar;
-		int rows;
-		int cols;
-		float relativeWidth;
-		float relativeHeight;
-		bool hasDoors;
-		int doors;
-		float relativeDWidth;
-		float relativeDHeight;
+		bool roof;				// Whether this facade is a roof
+		float score;			// Score of the facade
+		string imagename;		// Path to highest scoring facade chip
+		glm::vec3 norm;			// Facade normal
+		glm::mat4 xform;		// Transforms from 3D to rectified 2D
+		glm::mat4 invXform;		// Transforms from rectified 2D to 3D
+		glm::vec2 geom_size;	// Width and height after applied xform
+		vector<WinSection> winSections;		// Vertical window sections
+
+		bool valid;					// Facade has valid parameters
+		glm::vec2 chip_size;		// Size of chip given to DN, in meters
+		glm::vec3 bg_color;			// Background color (RGB, [0, 1])
+		glm::vec3 window_color;		// Window/door color (RGB, [0, 1])
+		int grammar;				// Which grammar this facade uses
+		int rows;					// Number of window rows per chip height
+		int cols;					// Number of window columns per chip width
+		float relativeWidth;		// Width of window relative to window cell
+		float relativeHeight;		// Height of window relative to window cell
+		bool hasDoors;				// Whether we have doors
+		int doors;					// Number of doors per chip width
+		float relativeDWidth;		// Width of doors relative to door cell
+		float relativeDHeight;		// Height of doors relative to chip height
 	};
 	map<size_t, FacadeParams> facadeParams;
 
+	// "Fuzzy" height comparator
+	auto heightCmp = [](const float& a, const float& b) -> bool {
+		static const float eps = 1e-3;
+		if (abs(a - b) > eps) return a < b;
+		return false;
+	};
 	// Group facades with similar parameters together
 	struct FacadeGroup {
 		vector<size_t> facades;		// Which facades are in the group
-		int grammar;
-		float avgHeight;
-		float avgRowsPerMeter;
+		vector<float> grammars;		// Which grammars are represented and by how much
+		set<float, decltype(heightCmp)> sheights;	// Heights of winsections in this group
+
+		bool valid;					// Whether group has valid parameters
+		int grammar;				// The selected grammar
+
+		float avgRowsPerMeter;		// Average parameter values
 		float avgColsPerMeter;
 		float avgRelWidth;
 		float avgRelHeight;
@@ -550,6 +578,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		float avgDoorsPerMeter;
 		float avgRelDWidth;
 		float avgRelDHeight;
+
+		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp) {}
 	};
 	vector<FacadeGroup> facadeGroups;
 	vector<int> whichGroup(facadeInfo.size(), -1);
@@ -567,6 +597,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		// Store parameters from metadata
 		FacadeParams fp;
 		fp.roof = meta["roof"].GetBool();
+		fp.score = meta["score"].GetFloat();
 		fp.imagename = meta["imagename"].GetString();
 
 		if (meta.HasMember("valid")) {
@@ -579,6 +610,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			fp.bg_color = { 0.0, 0.0, 0.0 };
 		}
 
+		fp.window_color = { 0.0, 0.0, 0.0 };
 		if (fp.valid) {
 			fp.chip_size.x = meta["chip_size"][0].GetDouble();
 			fp.chip_size.y = meta["chip_size"][1].GetDouble();
@@ -601,31 +633,131 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			}
 		}
 
+		// Reorient facade for easier window placement
+		fp.xform = glm::mat4(1.0);
+		fp.norm = glm::normalize(facadeInfo[fi].normal);
+		if (glm::dot(fp.norm, { 0.0, 0.0, 1.0 }) < 1.0) {
+			glm::vec3 up(0.0, 0.0, 1.0);
+			glm::vec3 right = glm::normalize(glm::cross(up, fp.norm));
+			up = glm::normalize(glm::cross(fp.norm, right));
+
+			fp.xform[0] = glm::vec4(right, 0.0f);
+			fp.xform[1] = glm::vec4(up, 0.0f);
+			fp.xform[2] = glm::vec4(fp.norm, 0.0f);
+			fp.xform = glm::transpose(fp.xform);
+		}
+
+		// Get rotated facade offset
+		glm::vec3 minXYZ(FLT_MAX);
+		fp.geom_size = glm::vec2(-FLT_MAX);
+		for (auto f : facadeInfo[fi].faceIDs) {
+			for (int vi = 0; vi < 3; vi++) {
+				glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+				minXYZ = glm::min(minXYZ, glm::vec3(fp.xform * glm::vec4(v, 1.0)));
+				fp.geom_size = glm::max(fp.geom_size, glm::vec2(fp.xform * glm::vec4(v, 1.0)));
+			}
+		}
+		fp.geom_size -= glm::vec2(minXYZ);
+		fp.xform[3] = glm::vec4(-minXYZ, 1.0);
+		fp.invXform = glm::inverse(fp.xform);
+
+		if (!fp.roof) {
+			// Get section boundaries along X
+			auto sepCmp = [](const float& a, const float& b) -> bool {
+				static const float eps = 1e-2;
+				if (abs(a - b) > eps) return a < b;
+				return false;
+			};
+			set<float, decltype(sepCmp)> xsep(sepCmp);
+			for (auto f : facadeInfo[fi].faceIDs) {
+				for (int vi = 0; vi < 3; vi++) {
+					glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+					xsep.insert((fp.xform * glm::vec4(v, 1.0)).x);
+				}
+			}
+
+			// Separate facade into window sections
+			auto& winSections = fp.winSections;
+			for (auto xi = xsep.begin(); xi != xsep.end(); ++xi) {
+				if (!winSections.empty())
+					winSections.back().maxBB.x = *xi;
+				auto xiNext = xi; ++xiNext;
+				if (xiNext != xsep.end()) {
+					winSections.push_back({});
+					winSections.back().minBB.x = *xi;
+				}
+			}
+
+			// Get vertical bounds of each section
+			for (auto f : facadeInfo[fi].faceIDs) {
+				// Get triangle bbox
+				glm::vec2 minTBB(FLT_MAX);
+				glm::vec2 maxTBB(-FLT_MAX);
+				for (int vi = 0; vi < 3; vi++) {
+					glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
+					minTBB = glm::min(minTBB, glm::vec2(fp.xform * glm::vec4(v, 1.0)));
+					maxTBB = glm::max(maxTBB, glm::vec2(fp.xform * glm::vec4(v, 1.0)));
+				}
+
+				// Intersect with all sections
+				for (auto& s : winSections) {
+					if (minTBB.x + 1e-2 < s.maxBB.x && maxTBB.x - 1e-2 > s.minBB.x) {
+						s.minBB.y = min(s.minBB.y, minTBB.y);
+						s.maxBB.y = max(s.maxBB.y, maxTBB.y);
+					}
+				}
+			}
+
+			// Combine adjacent sections of equal vertical bounds
+			for (auto si = winSections.begin(); si != winSections.end();) {
+				auto siNext = si; siNext++;
+				if (siNext == winSections.end()) break;
+				if (abs(si->minBB.y - siNext->minBB.y) < 1e-4 &&
+					abs(si->maxBB.y - siNext->maxBB.y) < 1e-4) {
+					si->maxBB.x = siNext->maxBB.x;
+					winSections.erase(siNext);
+				} else
+					++si;
+			}
+		}
+
 		// Store parameters for this facade
 		facadeParams[fi] = fp;
 
-		if (!fp.valid) continue;
+		if (fp.roof) continue;
+
+		// Get tallest two sections
+		vector<float> tallestSections;
+		for (auto si : fp.winSections)
+			tallestSections.push_back(si.maxBB.y - si.minBB.y);
+		sort(tallestSections.begin(), tallestSections.end(), [](float a, float b) -> bool {
+			return b < a; });
+		tallestSections.resize(2);
+
 
 		// Find a group for this facade
 		bool inGroup = false;
 		for (int g = 0; g < facadeGroups.size(); g++) {
 			FacadeGroup& fg = facadeGroups[g];
-			float sz = fg.facades.size();
-			// Add to group if height is similar, same style, and similar params
-			if (abs(facadeInfo[fi].height - fg.avgHeight / sz) < 1.0 &&
-				fp.grammar == fg.grammar &&
-				abs(fp.rows / fp.chip_size.y - fg.avgRowsPerMeter / sz) < 2 &&
-				abs(fp.cols / fp.chip_size.x - fg.avgColsPerMeter / sz) < 4) {
 
+			// Find a matching section height
+			bool foundSection = false;
+			for (auto ts : tallestSections) {
+				if (fg.sheights.count(ts))
+					foundSection = true;
+			}
+
+			// Add this facade and its grammar and heights to the group
+			if (foundSection) {
 				fg.facades.push_back(fi);
-				fg.avgHeight += facadeInfo[fi].height;
-				fg.avgRowsPerMeter += fp.rows / fp.chip_size.y;
-				fg.avgColsPerMeter += fp.cols / fp.chip_size.x;
-				fg.avgRelWidth += fp.relativeWidth;
-				fg.avgRelHeight += fp.relativeHeight;
-				fg.avgDoorsPerMeter += fp.doors / fp.chip_size.x;
-				fg.avgRelDWidth += fp.relativeDWidth;
-				fg.avgRelDHeight += fp.relativeDHeight;
+
+				if (fp.valid)
+					fg.grammars[fp.grammar] += fp.score;
+				else
+					fg.grammars[0] += fp.score;
+
+				for (auto ts : tallestSections)
+					fg.sheights.insert(ts);
 
 				whichGroup[fi] = g;
 				inGroup = true;
@@ -634,28 +766,56 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		}
 		// If no group matched, add a new group
 		if (!inGroup) {
-			FacadeGroup fg;
+			FacadeGroup fg(heightCmp);
 
 			fg.facades.push_back(fi);
-			fg.grammar = fp.grammar;
-			fg.avgHeight = facadeInfo[fi].height;
-			fg.avgRowsPerMeter = fp.rows / fp.chip_size.y;
-			fg.avgColsPerMeter = fp.cols / fp.chip_size.x;
-			fg.avgRelWidth = fp.relativeWidth;
-			fg.avgRelHeight = fp.relativeHeight;
-			fg.hasDoors = fp.hasDoors;
-			fg.avgDoorsPerMeter = fp.doors / fp.chip_size.x;
-			fg.avgRelDWidth = fp.relativeDWidth;
-			fg.avgRelDHeight = fp.relativeDHeight;
+
+			if (fp.valid)
+				fg.grammars[fp.grammar] += fp.score;
+			else
+				fg.grammars[0] += fp.score;
+
+			for (auto ts : tallestSections)
+				fg.sheights.insert(ts);
 
 			whichGroup[fi] = facadeGroups.size();
 			facadeGroups.push_back(fg);
 		}
 	}
-	// Average all group params
+	// Determine group grammar and parameters
 	for (auto& fg : facadeGroups) {
-		float sz = fg.facades.size();
-		fg.avgHeight /= sz;
+		// Get the grammar with the highest total score
+		float maxG = 0.1;
+		fg.grammar = 0;
+		for (int g = 1; g < fg.grammars.size(); g++)
+			if (fg.grammars[g] > maxG) {
+				maxG = fg.grammars[g];
+				fg.grammar = g;
+			}
+
+		// Group is valid if grammar is non-zero
+		fg.valid = (fg.grammar > 0);
+		// Set facades to valid or invalid
+		for (auto fi : fg.facades)
+			facadeParams[fi].valid = fg.valid;
+
+		if (!fg.valid) continue;
+
+		// Average out the parameter values for selected grammar
+		int sz = 0;
+		for (auto fi : fg.facades) {
+			auto& fp = facadeParams[fi];
+			if ((fp.grammar - 1) / 2 == (fg.grammar - 1) / 2) {
+				sz++;
+				fg.avgRowsPerMeter += fp.rows / fp.chip_size.y;
+				fg.avgColsPerMeter += fp.cols / fp.chip_size.x;
+				fg.avgRelWidth += fp.relativeWidth;
+				fg.avgRelHeight += fp.relativeHeight;
+				fg.avgDoorsPerMeter += fp.doors / fp.chip_size.x;
+				fg.avgRelDWidth += fp.relativeDWidth;
+				fg.avgRelDHeight += fp.relativeDHeight;
+			}
+		}
 		fg.avgRowsPerMeter /= sz;
 		fg.avgColsPerMeter /= sz;
 		fg.avgRelWidth /= sz;
@@ -675,35 +835,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 		// If we have DN metadata for this facade, synthesize a facade with windows
 		if (facadeParams.count(fi)) {
-			const FacadeParams& fp = facadeParams[fi];
-
-			// Reorient facade for easier window placement
-			glm::mat4 xform(1.0);
-			glm::vec3 norm = glm::normalize(facadeInfo[fi].normal);
-			if (glm::dot(norm, { 0.0, 0.0, 1.0 }) < 1.0) {
-				glm::vec3 up(0.0, 0.0, 1.0);
-				glm::vec3 right = glm::normalize(glm::cross(up, norm));
-				up = glm::normalize(glm::cross(norm, right));
-
-				xform[0] = glm::vec4(right, 0.0f);
-				xform[1] = glm::vec4(up, 0.0f);
-				xform[2] = glm::vec4(norm, 0.0f);
-				xform = glm::transpose(xform);
-			}
-
-			// Get rotated facade offset
-			glm::vec3 minXYZ(FLT_MAX);
-			glm::vec3 maxXYZ(-FLT_MAX);
-			for (auto f : facadeInfo[fi].faceIDs) {
-				for (int vi = 0; vi < 3; vi++) {
-					glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
-					minXYZ = glm::min(minXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
-					maxXYZ = glm::max(maxXYZ, glm::vec3(xform * glm::vec4(v, 1.0)));
-				}
-			}
-			maxXYZ -= minXYZ;
-			xform[3] = glm::vec4(-minXYZ, 1.0);
-			glm::mat4 invXform = glm::inverse(xform);
+			FacadeParams& fp = facadeParams[fi];
 
 			// If valid DN output, add windows and doors
 			if (fp.valid) {
@@ -725,72 +857,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				float doorXsep = doorCellW * (1.0 - fg.avgRelDWidth);
 				float doorXoff = doorXsep / 2.0;
 
-				// Get section boundaries along X
-				auto sepCmp = [](const float& a, const float& b) -> bool {
-					static const float eps = 1e-2;
-					if (abs(a - b) > eps) return a < b;
-					return false;
-				};
-				set<float, decltype(sepCmp)> xsep(sepCmp);
-				for (auto f : facadeInfo[fi].faceIDs) {
-					for (int vi = 0; vi < 3; vi++) {
-						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
-						xsep.insert((xform * glm::vec4(v, 1.0)).x);
-					}
-				}
-
-				// Separate facade into window sections
-				struct WinSection {
-					glm::vec2 minBB;
-					glm::vec2 maxBB;
-					int rows;
-					int cols;
-					float xscale;
-					float yoffset;
-				};
-				vector<WinSection> winSections;
-				for (auto xi = xsep.begin(); xi != xsep.end(); ++xi) {
-					if (!winSections.empty())
-						winSections.back().maxBB.x = *xi;
-					auto xiNext = xi; ++xiNext;
-					if (xiNext != xsep.end()) {
-						winSections.push_back({});
-						winSections.back().minBB.x = *xi;
-					}
-				}
-
-				// Get vertical bounds of each section
-				for (auto f : facadeInfo[fi].faceIDs) {
-					// Get triangle bbox
-					glm::vec2 minTBB(FLT_MAX);
-					glm::vec2 maxTBB(-FLT_MAX);
-					for (int vi = 0; vi < 3; vi++) {
-						glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
-						minTBB = glm::min(minTBB, glm::vec2(xform * glm::vec4(v, 1.0)));
-						maxTBB = glm::max(maxTBB, glm::vec2(xform * glm::vec4(v, 1.0)));
-					}
-
-					// Intersect with all sections
-					for (auto& s : winSections) {
-						if (minTBB.x + 1e-2 < s.maxBB.x && maxTBB.x - 1e-2 > s.minBB.x) {
-							s.minBB.y = min(s.minBB.y, minTBB.y);
-							s.maxBB.y = max(s.maxBB.y, maxTBB.y);
-						}
-					}
-				}
-
-				// Combine adjacent sections of equal vertical bounds
-				for (auto si = winSections.begin(); si != winSections.end();) {
-					auto siNext = si; siNext++;
-					if (siNext == winSections.end()) break;
-					if (abs(si->minBB.y - siNext->minBB.y) < 1e-4 &&
-						abs(si->maxBB.y - siNext->maxBB.y) < 1e-4) {
-						si->maxBB.x = siNext->maxBB.x;
-						winSections.erase(siNext);
-					} else
-						++si;
-				}
-
+				auto& xform = fp.xform;
+				auto& invXform = fp.invXform;
+				auto& winSections = fp.winSections;
 				// Separate window sections into door sections if we have any doors
 				struct DoorSection {
 					glm::vec2 minBB;
@@ -902,9 +971,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				objFile << "usemtl " << fiStr << "_bg" << endl;
 
 				// Add facade normals
-				glm::vec3 normR = glm::normalize(glm::cross(glm::vec3(0.0, 0.0, 1.0), norm));
+				glm::vec3 normR = glm::normalize(glm::cross(glm::vec3(0.0, 0.0, 1.0), fp.norm));
 				glm::vec3 normL = -normR;
-				objFile << "vn " << norm.x << " " << norm.y << " " << norm.z << endl;
+				objFile << "vn " << fp.norm.x << " " << fp.norm.y << " " << fp.norm.z << endl;
 				objFile << "vn " << normR.x << " " << normR.y << " " << normR.z << endl;
 				objFile << "vn " << normL.x << " " << normL.y << " " << normL.z << endl;
 				int normIdx = ++ncount;
@@ -991,7 +1060,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						(winSections[maxH].maxBB.y - winSections[maxH].minBB.y))
 						maxH = si;
 				}
-				if (fp.grammar != 3 && fp.grammar != 4) {
+				if (fg.grammar != 3 && fg.grammar != 4) {
 					// Center windows vertically on tallest window section
 					winSections[maxH].rows = floor(
 						(winSections[maxH].maxBB.y - winSections[maxH].minBB.y) / winCellH);
@@ -1003,7 +1072,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				// Output all windows
 				for (int si = 0; si < winSections.size(); si++) {
 					WinSection& s = winSections[si];
-					if (fp.grammar != 5 && fp.grammar != 6) {
+					if (fg.grammar != 5 && fg.grammar != 6) {
 						// Stretch spacing between columns horizontally on all sections
 						s.cols = floor((s.maxBB.x - s.minBB.x) / winCellW);
 						s.xscale = (s.cols == 0) ? 1.0 : (s.maxBB.x - s.minBB.x) / (s.cols * winCellW);
@@ -1013,7 +1082,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						s.xscale = 1.0;
 					}
 
-					if (fp.grammar != 3 && fp.grammar != 4) {
+					if (fg.grammar != 3 && fg.grammar != 4) {
 						// Align rows with rows on the tallest section
 						if (si != maxH) {
 							const WinSection& sm = winSections[maxH];
@@ -1047,7 +1116,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						float winYoff_s = winYoff;
 						float winCellH_s = winCellH;
 						float winH_s = winH;
-						if (fp.grammar == 3 || fp.grammar == 4) {
+						if (fg.grammar == 3 || fg.grammar == 4) {
 							winCellH_s = s.maxBB.y - s.minBB.y;
 							winYoff_s = g34_border;
 							winH_s = winCellH_s - 2 * winYoff_s;
@@ -1079,12 +1148,12 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							float wMaxX = wMinX + winW;
 
 							// Get spacing for special cases (horizontal windows)
-							if (fp.grammar == 5 || fp.grammar == 6) {
+							if (fg.grammar == 5 || fg.grammar == 6) {
 								wMinX = s.minBB.x;
 								wMaxX = s.maxBB.x;
 							}
 
-							if (fp.grammar != 5 && fp.grammar != 6) {
+							if (fg.grammar != 5 && fg.grammar != 6) {
 								// If first window, write spacing to the left of the row
 								if (c == 0) {
 									glm::vec3 va(s.minBB.x, wMinY, 0.0);
@@ -1123,7 +1192,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 							writeFace(va2, vb2, vc2, vd2, normIdx, true);
 							objFile << "usemtl " << fiStr << "_bg" << endl;
 
-							if (fp.grammar != 5 && fp.grammar != 6) {
+							if (fg.grammar != 5 && fg.grammar != 6) {
 								// If the last window, write spacing to the right of the row
 								if (c+1 == s.cols) {
 									glm::vec3 va(wMaxX, wMinY, 0.0);
@@ -1156,8 +1225,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 				// Upload xform matrix
 				glm::mat4 glXform(1.0);
-				glXform[0][0] = 2.0 / maxXYZ.x;
-				glXform[1][1] = 2.0 / maxXYZ.y;
+				glXform[0][0] = 2.0 / fp.geom_size.x;
+				glXform[1][1] = 2.0 / fp.geom_size.y;
 				glXform[3][0] = -1.0;
 				glXform[3][1] = -1.0;
 				glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(glXform));
@@ -1250,9 +1319,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 					glm::vec3 vc = posBuf[indexBuf[3 * f + 2]];
 
 					// Store positions in position buffer
-					synthPosBuf.push_back(xform * glm::vec4(va, 1.0));
-					synthPosBuf.push_back(xform * glm::vec4(vb, 1.0));
-					synthPosBuf.push_back(xform * glm::vec4(vc, 1.0));
+					synthPosBuf.push_back(fp.xform * glm::vec4(va, 1.0));
+					synthPosBuf.push_back(fp.xform * glm::vec4(vb, 1.0));
+					synthPosBuf.push_back(fp.xform * glm::vec4(vc, 1.0));
 					// Store colors in color buffer
 					synthColBuf.push_back(fp.bg_color);
 					synthColBuf.push_back(fp.bg_color);
@@ -1282,8 +1351,8 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 				// Upload xform matrix
 				glm::mat4 glXform(1.0);
-				glXform[0][0] = 2.0 / maxXYZ.x;
-				glXform[1][1] = 2.0 / maxXYZ.y;
+				glXform[0][0] = 2.0 / fp.geom_size.x;
+				glXform[1][1] = 2.0 / fp.geom_size.y;
 				glXform[3][0] = -1.0;
 				glXform[3][1] = -1.0;
 				glUniformMatrix4fv(xformLoc, 1, GL_FALSE, glm::value_ptr(glXform));
