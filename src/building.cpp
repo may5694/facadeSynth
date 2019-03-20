@@ -281,9 +281,9 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			cv::boxFilter(vBright, vBright, -1, ks);
 
 			// Calculate score
-			float w1 = 0.40;		// Shadow
-			float w2 = 0.25;		// Brightness
-			float w3 = 0.35;		// Area
+			float w1 = 0.35;		// Shadow
+			float w2 = 0.35;		// Brightness
+			float w3 = 0.30;		// Area
 			cv::Mat score = unOcc.mul(aImage).mul(
 				w1 * (1.0 - inShadow) + w2 * vBright + w3 * areas[si] / maxArea);
 			float avgScore = cv::mean(score, aMask)[0];
