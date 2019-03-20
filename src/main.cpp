@@ -170,6 +170,7 @@ int main(int argc, char** argv) {
 						siImg.cols, siImg.rows)));
 					cmpName.append(si->first + ".");
 				}
+				if (cmpImg.rows == 0 || cmpImg.cols == 0) continue;
 
 				// Save the combined image
 				fs::path cmpPath = selDir / (cmpName + "png");
