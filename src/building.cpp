@@ -133,7 +133,7 @@ void Building::clear() {
 }
 
 // Compute the best score of each facade and return metadata
-map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
+map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) const {
 	// Map facade IDs to output metadata paths
 	map<size_t, fs::path> facadeMap;
 
@@ -189,12 +189,12 @@ map<size_t, fs::path> Building::scoreFacades(fs::path outputDir) {
 			// Iterate over each triangle
 			for (auto f : finfo.faceIDs) {
 				// Get vertices
-				glm::vec2 va = satTCBufs[si][indexBuf[3 * f + 0]];
-				va = glm::vec2(util::SpatXform::uv2px(glm::vec3(va, 0.0), satInfo[si].roi));
-				glm::vec2 vb = satTCBufs[si][indexBuf[3 * f + 1]];
-				vb = glm::vec2(util::SpatXform::uv2px(glm::vec3(vb, 0.0), satInfo[si].roi));
-				glm::vec2 vc = satTCBufs[si][indexBuf[3 * f + 2]];
-				vc = glm::vec2(util::SpatXform::uv2px(glm::vec3(vc, 0.0), satInfo[si].roi));
+				glm::vec2 va = satTCBufs.at(si)[indexBuf[3 * f + 0]];
+				va = glm::vec2(util::SpatXform::uv2px(glm::vec3(va, 0.0), satInfo.at(si).roi));
+				glm::vec2 vb = satTCBufs.at(si)[indexBuf[3 * f + 1]];
+				vb = glm::vec2(util::SpatXform::uv2px(glm::vec3(vb, 0.0), satInfo.at(si).roi));
+				glm::vec2 vc = satTCBufs.at(si)[indexBuf[3 * f + 2]];
+				vc = glm::vec2(util::SpatXform::uv2px(glm::vec3(vc, 0.0), satInfo.at(si).roi));
 				// Calc area
 				glm::vec2 ba = vb - va;
 				glm::vec2 ca = vc - va;
@@ -579,7 +579,10 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		float avgRelDWidth;
 		float avgDHeight;			// Not relative D height; chip size differs
 
-		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp) {}
+		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp),
+			valid(false), grammar(0), avgRowsPerMeter(0.0), avgColsPerMeter(0.0),
+			avgRelWidth(0.0), avgRelHeight(0.0), hasDoors(false), avgDoorsPerMeter(0.0),
+			avgRelDWidth(0.0), avgDHeight(0.0) {}
 	};
 	vector<FacadeGroup> facadeGroups;
 	vector<int> whichGroup(facadeInfo.size(), -1);
