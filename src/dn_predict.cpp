@@ -367,10 +367,12 @@ cv::Mat crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bgroun
 	else if (type == 2) {
 		if (facChip_size[0] < 1.6 * target_width || !bMultipleChips) {
 			double target_ratio_width = target_width / facChip_size[0];
-			//double padding_width_ratio = (1 - target_ratio_width) * 0.5;
-			double padding_width_ratio = 0;
+			double target_ratio_height = target_height / facChip_size[1];
+			if (target_ratio_height > 1.0)
+				target_ratio_height = 1.0;
+			double padding_width_ratio = (1 - target_ratio_width) * 0.5;
 			// crop 30 * 30
-			cv::Mat tmp = src_chip(cv::Rect(src_chip.size().width * padding_width_ratio, 0, src_chip.size().width * target_ratio_width, src_chip.size().height));
+			cv::Mat tmp = src_chip(cv::Rect(src_chip.size().width * padding_width_ratio, 0, src_chip.size().width * target_ratio_width, src_chip.size().height * target_ratio_height));
 			croppedImage = adjust_chip(tmp);
 		}
 		else {
@@ -408,13 +410,16 @@ cv::Mat crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bgroun
 		if (facChip_size[1] < 1.6 * target_width || !bMultipleChips) {
 			double target_ratio_height = target_height / facChip_size[1];
 			double padding_height_ratio = 0;
+			double target_ratio_width = target_width / facChip_size[0];
+			if (target_ratio_width >= 1.0)
+				target_ratio_width = 1.0;
 			if (!bground) {
 				padding_height_ratio = (1 - target_ratio_height) * 0.5;
 			}
 			else {
 				padding_height_ratio = (1 - target_ratio_height);
 			}
-			cv::Mat tmp = src_chip(cv::Rect(0, src_chip.size().height * padding_height_ratio, src_chip.size().width, src_chip.size().height * target_ratio_height));
+			cv::Mat tmp = src_chip(cv::Rect(0, src_chip.size().height * padding_height_ratio, src_chip.size().width * target_ratio_width, src_chip.size().height * target_ratio_height));
 			croppedImage = adjust_chip(tmp);
 		}
 		else {
@@ -422,10 +427,13 @@ cv::Mat crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bgroun
 			int index = 0;
 			double start_height_ratio = index * 0.1;
 			double target_ratio_height = target_height / facChip_size[1];
+			double target_ratio_width = target_width / facChip_size[0];
+			if (target_ratio_width >= 1.0)
+				target_ratio_width = 1.0;
 			std::vector<double> confidences;
 			while (start_height_ratio + target_ratio_height < 1.0) {
 				// get the cropped img
-				cv::Mat tmp = src_chip(cv::Rect(0, src_chip.size().height * start_height_ratio, src_chip.size().width, src_chip.size().height * target_ratio_height));
+				cv::Mat tmp = src_chip(cv::Rect(0, src_chip.size().height * start_height_ratio, src_chip.size().width * target_ratio_width, src_chip.size().height * target_ratio_height));
 				croppedImage = adjust_chip(tmp);
 				// get confidence value for the cropped img
 				double conf_value = compute_confidence(croppedImage, modeljson, false)[0];
