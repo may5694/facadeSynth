@@ -577,7 +577,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		bool hasDoors;
 		float avgDoorsPerMeter;
 		float avgRelDWidth;
-		float avgRelDHeight;
+		float avgDHeight;			// Not relative D height; chip size differs
 
 		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp) {}
 	};
@@ -631,6 +631,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				fp.relativeDWidth = meta["paras"]["relativeDWidth"].GetFloat();
 				fp.relativeDHeight = meta["paras"]["relativeDHeight"].GetFloat();
 			}
+		} else {
+			fp.grammar = 0;
+			fp.hasDoors = false;
 		}
 
 		// Reorient facade for easier window placement
@@ -792,6 +795,11 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				maxG = fg.grammars[g];
 				fg.grammar = g;
 			}
+		// If any in this group have doors, add doors
+		if (fg.grammar == 1 || fg.grammar == 3 || fg.grammar == 5)
+			if (fg.grammars[2] > 0 || fg.grammars[4] > 0 || fg.grammars[6] > 0)
+				fg.grammar++;
+		fg.hasDoors = (fg.grammar == 2 || fg.grammar == 4 || fg.grammar == 6);
 
 		// Group is valid if grammar is non-zero
 		fg.valid = (fg.grammar > 0);
@@ -803,26 +811,32 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 		// Average out the parameter values for selected grammar
 		int sz = 0;
+		int szd = 0;
 		for (auto fi : fg.facades) {
 			auto& fp = facadeParams[fi];
-			if ((fp.grammar - 1) / 2 == (fg.grammar - 1) / 2) {
+			if (fp.grammar && (fp.grammar - 1) / 2 == (fg.grammar - 1) / 2) {
 				sz++;
 				fg.avgRowsPerMeter += fp.rows / fp.chip_size.y;
 				fg.avgColsPerMeter += fp.cols / fp.chip_size.x;
 				fg.avgRelWidth += fp.relativeWidth;
 				fg.avgRelHeight += fp.relativeHeight;
+			}
+			if (fp.grammar && fp.hasDoors) {
+				szd++;
 				fg.avgDoorsPerMeter += fp.doors / fp.chip_size.x;
 				fg.avgRelDWidth += fp.relativeDWidth;
-				fg.avgRelDHeight += fp.relativeDHeight;
+				fg.avgDHeight += fp.relativeDHeight * fp.chip_size.y;
 			}
 		}
 		fg.avgRowsPerMeter /= sz;
 		fg.avgColsPerMeter /= sz;
 		fg.avgRelWidth /= sz;
 		fg.avgRelHeight /= sz;
-		fg.avgDoorsPerMeter /= sz;
-		fg.avgRelDWidth /= sz;
-		fg.avgRelDHeight /= sz;
+		if (szd) {
+			fg.avgDoorsPerMeter /= szd;
+			fg.avgRelDWidth /= szd;
+			fg.avgDHeight /= szd;
+		}
 	}
 
 	// Iterate over all facades
@@ -853,7 +867,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				float winYoff = winYsep / 2.0;
 				float doorCellW = 1.0 / max(fg.avgDoorsPerMeter, 0.01f);
 				float doorW = doorCellW * fg.avgRelDWidth;
-				float doorH = fp.chip_size.y * fg.avgRelDHeight;
+				float doorH = fg.avgDHeight;
 				float doorXsep = doorCellW * (1.0 - fg.avgRelDWidth);
 				float doorXoff = doorXsep / 2.0;
 
