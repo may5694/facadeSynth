@@ -91,6 +91,12 @@ glm::vec3 SpatXform::uv2px(glm::vec3 p, cv::Rect satBB) {
 	px.y = (1.0 - p.y) * satBB.height;
 	return px;
 }
+glm::vec2 SpatXform::px2uv(glm::vec2 p, cv::Rect satBB) {
+	return glm::vec2(px2uv(glm::vec3(p, 0.0), satBB));
+}
+glm::vec2 SpatXform::uv2px(glm::vec2 p, cv::Rect satBB) {
+	return glm::vec2(uv2px(glm::vec3(p, 0.0), satBB));
+}
 
 
 // Canvas constructor

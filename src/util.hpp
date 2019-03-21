@@ -19,6 +19,8 @@ public:
 	glm::vec3 uv2utm(glm::vec3 p, Satellite& sat, cv::Rect satBB = {});
 	static glm::vec3 px2uv(glm::vec3 p, cv::Rect satBB);
 	static glm::vec3 uv2px(glm::vec3 p, cv::Rect satBB);
+	static glm::vec2 px2uv(glm::vec2 p, cv::Rect satBB);
+	static glm::vec2 uv2px(glm::vec2 p, cv::Rect satBB);
 
 private:
 	// Internal state
