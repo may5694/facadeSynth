@@ -732,7 +732,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			tallestSections.push_back(si.maxBB.y - si.minBB.y);
 		sort(tallestSections.begin(), tallestSections.end(), [](float a, float b) -> bool {
 			return b < a; });
-		tallestSections.resize(2);
+		tallestSections.resize(1);
 
 
 		// Find a group for this facade
@@ -752,9 +752,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				fg.facades.push_back(fi);
 
 				if (fp.valid)
-					fg.grammars[fp.grammar] += fp.score;
+					fg.grammars[fp.grammar] = max(fg.grammars[fp.grammar], fp.score);
 				else
-					fg.grammars[0] += fp.score;
+					fg.grammars[0] = max(fg.grammars[0], fp.score);
 
 				for (auto ts : tallestSections)
 					fg.sheights.insert(ts);
