@@ -819,7 +819,10 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			auto& fp = facadeParams[fi];
 			if (fp.grammar && (fp.grammar - 1) / 2 == (fg.grammar - 1) / 2) {
 				sz++;
-				fg.avgRowsPerMeter += fp.rows / fp.chip_size.y;
+				if (fp.hasDoors)
+					fg.avgRowsPerMeter += fp.rows / (fp.chip_size.y * (1.0 - fp.relativeDHeight));
+				else
+					fg.avgRowsPerMeter += fp.rows / fp.chip_size.y;
 				fg.avgColsPerMeter += fp.cols / fp.chip_size.x;
 				fg.avgRelWidth += fp.relativeWidth;
 				fg.avgRelHeight += fp.relativeHeight;

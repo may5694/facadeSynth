@@ -255,7 +255,7 @@ bool chipping(std::string metajson, std::string modeljson, cv::Mat& croppedImage
 		type = 3;
 		bvalid = true;
 	}
-	else if (!broof && facChip_size[0] > 30.0 && facChip_size[1] > 30.0 && score > 0.68) {
+	else if (!broof && facChip_size[0] > 30.0 && facChip_size[1] > 30.0 && score > 0.67) {
 		type = 4;
 		bvalid = true;
 	}
@@ -451,7 +451,7 @@ cv::Mat crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bgroun
 				}
 			}
 			// output best img
-			cv::Mat best_cropped_tmp = src_chip(cv::Rect(0, src_chip.size().height * best_id * 0.1, src_chip.size().width, src_chip.size().height * target_ratio_height));
+			cv::Mat best_cropped_tmp = src_chip(cv::Rect(0, src_chip.size().height * best_id * 0.1, src_chip.size().width * target_ratio_width, src_chip.size().height * target_ratio_height));
 			cv::Mat best_cropped = adjust_chip(best_cropped_tmp);
 			if (bground) {
 				// check the grammar of the last chip
