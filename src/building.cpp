@@ -539,6 +539,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		glm::mat4 invXform;		// Transforms from rectified 2D to 3D
 		glm::vec2 geom_size;	// Width and height after applied xform
 		vector<WinSection> winSections;		// Vertical window sections
+		float minZ;				// Z coord of facade-space origin
 
 		bool valid;					// Facade has valid parameters
 		glm::vec2 chip_size;		// Size of chip given to DN, in meters
@@ -567,6 +568,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		vector<size_t> facades;		// Which facades are in the group
 		vector<float> grammars;		// Which grammars are represented and by how much
 		set<float, decltype(heightCmp)> sheights;	// Heights of winsections in this group
+		float yoffset;				// Y offset for this group
 
 		bool valid;					// Whether group has valid parameters
 		int grammar;				// The selected grammar
@@ -580,7 +582,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		float avgRelDWidth;
 		float avgDHeight;			// Not relative D height; chip size differs
 
-		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp),
+		FacadeGroup(decltype(heightCmp) cmp) : grammars(7, 0.0), sheights(cmp), yoffset(0.0),
 			valid(false), grammar(0), avgRowsPerMeter(0.0), avgColsPerMeter(0.0),
 			avgRelWidth(0.0), avgRelHeight(0.0), hasDoors(false), avgDoorsPerMeter(0.0),
 			avgRelDWidth(0.0), avgDHeight(0.0) {}
@@ -665,11 +667,13 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		// Get rotated facade offset
 		glm::vec3 minXYZ(FLT_MAX);
 		fp.geom_size = glm::vec2(-FLT_MAX);
+		fp.minZ = FLT_MAX;
 		for (auto f : facadeInfo[fi].faceIDs) {
 			for (int vi = 0; vi < 3; vi++) {
 				glm::vec3 v = posBuf[indexBuf[3 * f + vi]];
 				minXYZ = glm::min(minXYZ, glm::vec3(fp.xform * glm::vec4(v, 1.0)));
 				fp.geom_size = glm::max(fp.geom_size, glm::vec2(fp.xform * glm::vec4(v, 1.0)));
+				fp.minZ = min(fp.minZ, v.z);
 			}
 		}
 		fp.geom_size -= glm::vec2(minXYZ);
@@ -858,6 +862,26 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			fg.avgDoorsPerMeter /= szd;
 			fg.avgRelDWidth /= szd;
 			fg.avgDHeight /= szd;
+		}
+
+		// Calculate y offset
+		if (fg.grammar != 3 && fg.grammar != 4) {
+			// Get tallest facade in this group
+			float minZts = 0.0;
+			float maxHts = 0.0;
+			for (auto fi : fg.facades) {
+				auto& fp = facadeParams[fi];
+				for (auto& ws : fp.winSections) {
+					if (ws.maxBB.y - ws.minBB.y > maxHts) {
+						maxHts = ws.maxBB.y - ws.minBB.y;
+						minZts = fp.minZ + ws.minBB.y;
+					}
+				}
+			}
+
+			int rows = floor(maxHts * fg.avgRowsPerMeter);
+			fg.yoffset = (maxHts - rows / fg.avgRowsPerMeter) / 2 + minZts;
+			fg.yoffset = fg.yoffset - floor(fg.yoffset * fg.avgRowsPerMeter) / fg.avgRowsPerMeter;
 		}
 	}
 
@@ -1089,22 +1113,6 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 				// Skip if all window sections became door sections
 				if (winSections.empty()) continue;
 
-				// Get the tallest window section
-				int maxH = -1;
-				for (int si = 0; si < winSections.size(); ++si) {
-					if (maxH < 0 || (winSections[si].maxBB.y - winSections[si].minBB.y) >
-						(winSections[maxH].maxBB.y - winSections[maxH].minBB.y))
-						maxH = si;
-				}
-				if (fg.grammar != 3 && fg.grammar != 4) {
-					// Center windows vertically on tallest window section
-					winSections[maxH].rows = floor(
-						(winSections[maxH].maxBB.y - winSections[maxH].minBB.y) / winCellH);
-					winSections[maxH].yoffset =
-						((winSections[maxH].maxBB.y - winSections[maxH].minBB.y) -
-						winSections[maxH].rows * winCellH) / 2;
-				}
-
 				// Output all windows
 				for (int si = 0; si < winSections.size(); si++) {
 					WinSection& s = winSections[si];
@@ -1118,14 +1126,12 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 						s.xscale = 1.0;
 					}
 
+					// Align all window rows
 					if (fg.grammar != 3 && fg.grammar != 4) {
-						// Align rows with rows on the tallest section
-						if (si != maxH) {
-							const WinSection& sm = winSections[maxH];
-							s.yoffset = ceil((s.minBB.y - sm.minBB.y - sm.yoffset) / winCellH)
-								* winCellH + sm.minBB.y + sm.yoffset - s.minBB.y;
-							s.rows = floor((s.maxBB.y - s.minBB.y - s.yoffset) / winCellH);
-						}
+						s.yoffset = ceil((fp.minZ + s.minBB.y - fg.yoffset) / winCellH) * winCellH
+							+ fg.yoffset - (fp.minZ + s.minBB.y);
+						s.rows = floor((s.maxBB.y - s.minBB.y - s.yoffset) / winCellH);
+
 					} else {
 						// If vertical windows, only use one row (if section big enough)
 						if (s.maxBB.y - s.minBB.y > 2 * g34_border) {
