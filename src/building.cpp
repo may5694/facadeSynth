@@ -614,7 +614,15 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 			fp.bg_color = { 0.0, 0.0, 0.0 };
 		}
 
-		fp.window_color = { 0.0, 0.0, 0.0 };
+		// Brighten up those really dark facades
+		float brt = glm::dot(fp.bg_color, glm::vec3(1.0f)) / 3.0f;
+		if (brt < 0.3f) {
+			fp.bg_color *= 0.5f / brt;
+			fp.bg_color = glm::clamp(fp.bg_color, 0.0f, 1.0f);
+		}
+		// Set initial window color to 60% of background color
+		fp.window_color = fp.bg_color * 0.6f;
+
 		if (fp.valid) {
 			fp.chip_size.x = meta["chip_size"][0].GetDouble();
 			fp.chip_size.y = meta["chip_size"][1].GetDouble();
