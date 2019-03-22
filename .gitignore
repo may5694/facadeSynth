@@ -1,6 +1,8 @@
 build/
+debug/
 data/
 output/
+fig/
 facadeSynth
 *.o
 *.swp
