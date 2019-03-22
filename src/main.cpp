@@ -26,6 +26,7 @@ struct Options {
 	fs::path configPath;	// Path to config file
 	bool generate;			// Generate data from input directories
 	bool selected;			// Process selected clusters (from config) and gen comparisons
+	bool noestim;			// Skip scoring and estimation
 	map<string, string> selectedSats;		// Best views for selected clusters
 
 	// Config file options
@@ -41,7 +42,8 @@ struct Options {
 		noop(false),
 		configPath("config.json"),
 		generate(false),
-		selected(false) {}
+		selected(false),
+		noestim(false) {}
 };
 
 // Functions
@@ -99,27 +101,49 @@ int main(int argc, char** argv) {
 		for (auto& b : bldgs) {
 			cout << "Processing cluster " << b.getCluster() << "..." << endl;
 			try {
-				// Score facades
-				cout << "    Scoring facades..." << endl;
-				map<size_t, fs::path> facadeMeta = b.scoreFacades(opts.outputDir);
 
-				// Predict facade structure using DN
-				cout << "    Predicting parameters..." << endl;
-				for (auto& fi : facadeMeta) {
-					// Don't predict roof params
-					if (b.getFacadeInfo()[fi.first].roof) continue;
+				map<size_t, fs::path> facadeMeta;
+				if (!opts.noestim) {
+					// Score facades
+					cout << "    Scoring facades..." << endl;
+					facadeMeta = b.scoreFacades(opts.outputDir);
 
-					dn_predict(fi.second.string(), "model_config.json");
+					// Predict facade structure using DN
+					cout << "    Predicting parameters..." << endl;
+					for (auto& fi : facadeMeta) {
+						// Don't predict roof params
+						if (b.getFacadeInfo()[fi.first].roof) continue;
+
+						dn_predict(fi.second.string(), "model_config.json");
+					}
+
+				} else {
+					// Find any existing metadata and use it
+					fs::path metaDir =
+						opts.outputDir / opts.region / opts.model / b.getCluster() / "metadata";
+					for (fs::directory_iterator di(metaDir), dend; di != dend; ++di) {
+						if (di->path().extension().string() == ".json") {
+							// Parse facade ID
+							string metaName = di->path().stem().string();
+							string fidStr = metaName.substr(b.getCluster().length() + 1);
+							size_t fid = stoi(fidStr);
+
+							// Add to facadeMeta
+							facadeMeta[fid] = di->path();
+						}
+					}
 				}
 
 				// Synthesize facades
 				cout << "    Synthesizing facades..." << endl;
 				b.synthFacadeGeometry(opts.outputDir, facadeMeta);
+
 			} catch (const exception& e) {
 				cout << "Failed to process cluster " << b.getCluster() << ": " << e.what() << endl;
 				continue;
 			}
 		}
+
 
 		// Combine all cluster outputs
 		if (opts.all) {
@@ -196,6 +220,7 @@ Options parseCmd(int argc, char** argv) {
 		out << "    -g, --generate       Generate cluster data from input" << endl;
 		out << "                           directories." << endl;
 		out << "    -s, --selected       Process selected clusters from config" << endl;
+		out << "    -N, --no-estim       Skip scoring and estimation" << endl;
 		out << "    -h, --help           Display this help and exit" << endl;
 		out << "    -m, --model <name>   Which model to process" << endl;
 		out << "                           Defaults to cgv_r" << endl;
@@ -250,6 +275,9 @@ Options parseCmd(int argc, char** argv) {
 			} else if (arg == "-s" || arg == "--selected") {
 				opts.selected = true;
 				opts.all = false;
+
+			} else if (arg == "-N" || arg == "--no-estim") {
+				opts.noestim = true;
 
 			// Ask for help
 			} else if (arg == "-h" || arg == "--help") {
