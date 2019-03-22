@@ -24,11 +24,12 @@ cv::Mat facade_clustering_kkmeans(cv::Mat src_img, int clusters);
 
 /**** steps *****/
 bool chipping(std::string metajson, std::string modeljson, cv::Mat& croppedImage, bool bMultipleChips, bool bDebug);
-cv::Mat crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bground, std::vector<double> facChip_size, double target_width, double target_height, bool bMultipleChips);
+std::vector<cv::Mat> crop_chip(cv::Mat src_chip, std::string modeljson, int type, bool bground, std::vector<double> facChip_size, double target_width, double target_height, bool bMultipleChips);
 cv::Mat adjust_chip(cv::Mat chip);
 bool checkFacade(std::string facade_name);
 void saveInvalidFacade(std::string metajson, std::string img_filename, bool bDebug);
 std::vector<double> compute_confidence(cv::Mat croppedImage, std::string modeljson, bool bDebug);
+std::vector<double> compute_door_paras(cv::Mat croppedImage, std::string modeljson, bool bDebug);
 
 bool segment_chip(cv::Mat croppedImage, cv::Mat& dnn_img, std::string metajson, std::string modeljson, bool bDebug);
 cv::Mat cleanAlignedImage(cv::Mat src, float threshold);
