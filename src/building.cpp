@@ -620,6 +620,9 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		float brt = glm::dot(fp.bg_color, glm::vec3(1.0f)) / 3.0f;
 		if (brt < 0.3f) {
 			fp.bg_color *= 0.5f / brt;
+			// Make closer to average (reduce saturation)
+			float avg = glm::dot(fp.bg_color, glm::vec3(1.0f)) / 3.0f;
+			fp.bg_color += (glm::vec3(avg) - fp.bg_color) * 0.4f;
 			fp.bg_color = glm::clamp(fp.bg_color, 0.0f, 1.0f);
 		}
 		// Set initial window color to 60% of background color
