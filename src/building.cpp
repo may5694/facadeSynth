@@ -526,6 +526,7 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 		int cols;				// Number of columns of windows
 		float xscale;			// Horizontal scale factor for window spacing
 		float yoffset;			// Vertical offset to align rows
+		WinSection(): minBB(0.0, FLT_MAX), maxBB(0.0, -FLT_MAX) {}
 	};
 
 	// Store facade parameters
@@ -732,13 +733,20 @@ void Building::synthFacadeGeometry(fs::path outputDir, map<size_t, fs::path> fac
 
 		if (fp.roof) continue;
 
-		// Get tallest two sections
+		// Get tallest sections
 		vector<float> tallestSections;
 		for (auto si : fp.winSections)
 			tallestSections.push_back(si.maxBB.y - si.minBB.y);
 		sort(tallestSections.begin(), tallestSections.end(), [](float a, float b) -> bool {
 			return b < a; });
-		tallestSections.resize(1);
+
+		// Limit to two tallest sections
+		if (tallestSections.size() >= 2) {
+			tallestSections.resize(2);
+			// Remove smaller height if much smaller than tallest
+			if (tallestSections[1] / tallestSections[0] < 0.8)
+				tallestSections.pop_back();
+		}
 
 
 		// Find a group for this facade
