@@ -9,8 +9,8 @@ SpatXform::SpatXform(uint32_t epsgCode, glm::vec3 origin) :
 	// Init transformation structures
 	srUTM.importFromEPSG(epsgCode);
 	srLL = srUTM.CloneGeogCS();
-	utm2ll = OGRCreateCoordinateTransformation(&srUTM, srLL);
-	ll2utm = OGRCreateCoordinateTransformation(srLL, &srUTM);
+	_utm2ll = OGRCreateCoordinateTransformation(&srUTM, srLL);
+	_ll2utm = OGRCreateCoordinateTransformation(srLL, &srUTM);
 }
 
 // Transform from UTM to pixels
@@ -19,7 +19,7 @@ glm::vec3 SpatXform::utm2px(glm::vec3 p, Satellite& sat, cv::Rect satBB) {
 	glm::dvec3 dp(p + origin);
 
 	// UTM to lat/long
-	utm2ll->Transform(1, &dp.x, &dp.y);
+	_utm2ll->Transform(1, &dp.x, &dp.y);
 
 	// Lat/long to pixels
 	int succ;
@@ -45,12 +45,12 @@ glm::vec3 SpatXform::px2utm(glm::vec3 p, Satellite& sat, cv::Rect satBB) {
 	GDALRPCTransform(sat.rpcXformer, TRUE, 1, &dp.x, &dp.y, &dp.z, &succ);
 
 	// Lat/long to UTM
-	ll2utm->Transform(1, &dp.x, &dp.y);
+	_ll2utm->Transform(1, &dp.x, &dp.y);
 
 	// Subtract building origin
 	dp = dp - glm::dvec3(origin);
 
-	return glm::vec3(p);
+	return glm::vec3(dp);
 }
 
 glm::vec3 SpatXform::utm2uv(glm::vec3 p, Satellite& sat, cv::Rect satBB) {
@@ -69,6 +69,31 @@ glm::vec3 SpatXform::uv2utm(glm::vec3 p, Satellite& sat, cv::Rect satBB) {
 	// Convert to px, then to utm
 	return px2utm(uv2px(p, satBB), sat, satBB);
 }
+
+// Transforms UTM coords relative to ORIGIN to lat/long
+glm::vec3 SpatXform::utm2ll(glm::vec3 p) {
+	// Add origin
+	glm::dvec3 dp(p + origin);
+
+	// UTM to lat/long
+	_utm2ll->Transform(1, &dp.x, &dp.y);
+
+	// Return coords
+	return glm::vec3(dp);
+}
+// Transform lat/long to UTM coords relative to ORIGIN
+glm::vec3 SpatXform::ll2utm(glm::vec3 p) {
+	glm::dvec3 dp(p);
+
+	// Lat/long to UTM
+	_ll2utm->Transform(1, &dp.x, &dp.y);
+
+	// Subtract origin
+	dp = dp - glm::dvec3(origin);
+
+	return glm::vec3(dp);
+}
+
 glm::vec3 SpatXform::px2uv(glm::vec3 p, cv::Rect satBB) {
 	// Do nothing if invalid rect passed
 	if (satBB.width <= 0 || satBB.height <= 0)

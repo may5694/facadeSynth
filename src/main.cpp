@@ -11,6 +11,7 @@
 #include "satellite.hpp"
 #include "building.hpp"
 #include "dn_predict.hpp"
+#include "util.hpp"
 using namespace std;
 namespace rj = rapidjson;
 namespace fs = std::experimental::filesystem;
@@ -34,6 +35,7 @@ struct Options {
 	fs::path satelliteDir;	// Dir containing pansharpened satellite imagery per region
 	fs::path dataDir;		// Saved data output directory
 	fs::path outputDir;		// Synthesized facades output directory
+	fs::path kmzDir;		// Output KMZ files directory
 
 	// Constructor - set default values
 	Options() :
@@ -51,6 +53,7 @@ Options parseCmd(int argc, char** argv);
 void readConfig(Options& opts);
 void checkDirectories(Options& opts);
 map<string, Satellite> loadSatellites(Options& opts);
+void makeKMZ(Options& opts, vector<Building>& bldgs);
 
 // Program entry point
 int main(int argc, char** argv) {
@@ -149,7 +152,11 @@ int main(int argc, char** argv) {
 		if (opts.all) {
 			cout << "Combining all clusters..." << endl;
 			Building::combineOutput(opts.outputDir, opts.region, opts.model, bldgs);
+
+			// Generate KMZ contents
+			makeKMZ(opts, bldgs);
 		}
+
 
 		// Generate comparison images
 		if (opts.selected) {
@@ -201,6 +208,7 @@ int main(int argc, char** argv) {
 				cv::imwrite(cmpPath.string(), cmpImg);
 			}
 		}
+
 
 	// Handle any exceptions
 	} catch (const exception& e) {
@@ -335,6 +343,7 @@ void readConfig(Options& opts) {
 			["satelliteDir"].GetString();
 		opts.dataDir = config["dataDir"].GetString();
 		opts.outputDir = config["outputDir"].GetString();
+		opts.kmzDir = config["kmzDir"].GetString();
 
 		// Read selected clusters if specified in options
 		if (opts.selected) {
@@ -425,6 +434,13 @@ void checkDirectories(Options& opts) {
 		fs::create_directory(opts.outputDir);
 	if (!fs::exists(opts.outputDir / opts.region))
 		fs::create_directory(opts.outputDir / opts.region);
+	// Create KMZ directories if they do not exist
+	if (opts.all) {
+		if (!fs::exists(opts.kmzDir))
+			fs::create_directory(opts.kmzDir);
+		if (!fs::exists(opts.kmzDir / opts.region))
+			fs::create_directory(opts.kmzDir / opts.region);
+	}
 
 	fs::path dataClusterDir = opts.dataDir / "regions" / opts.region / opts.model;
 	// Use all clusters in region if none specified
@@ -482,3 +498,104 @@ map<string, Satellite> loadSatellites(Options& opts) {
 
 	return sats;
 }
+
+// Creates a KML file and Blender python script to export building .dae files
+void makeKMZ(Options& opts, vector<Building>& bldgs) {
+
+	// Create KMZ directory
+	fs::path kmzDir = opts.kmzDir / opts.region / opts.model;
+	if (!fs::exists(kmzDir))
+		fs::create_directories(kmzDir);
+
+	// Create KMZ files directory
+	fs::path kmzFilesDir = kmzDir / "files";
+	if (fs::exists(kmzFilesDir))
+		fs::remove_all(kmzFilesDir);
+	fs::create_directory(kmzFilesDir);
+
+	// Create KML file
+	fs::path kmlPath = kmzDir / "doc.kml";
+	ofstream kmlFile(kmlPath);
+
+	// Write header
+	kmlFile << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" << endl;
+	kmlFile << "<kml xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\">" << endl;
+	kmlFile << "<Document>" << endl;
+
+	// Write each building
+	for (auto& b : bldgs) {
+		util::SpatXform sx(b.getEPSGCode(), b.getOrigin());
+		glm::vec2 latlong = { sx.utm2ll(glm::vec3(0.0)) };
+		float heading = -90.0;
+
+		kmlFile << "<Placemark>" << endl;
+			kmlFile << "\t<name>" << b.getCluster() << "</name>" << endl;
+			kmlFile << "\t<Model id=\"" << b.getCluster() << "\">" << endl;
+				kmlFile << "\t\t<altitudeMode>absolute</altitudeMode>" << endl;
+				kmlFile << "\t\t<Location>" << endl;
+					kmlFile << "\t\t\t<longitude>"
+						<< fixed << setprecision(20) << latlong.x << "</longitude>" << endl;
+					kmlFile << "\t\t\t<latitude>"
+						<< fixed << setprecision(20) << latlong.y << "</latitude>" << endl;
+					kmlFile << "\t\t\t<altitude>0</altitude>" << endl;
+				kmlFile << "\t\t</Location>" << endl;
+				kmlFile << "\t\t<Orientation>" << endl;
+					kmlFile << "\t\t\t<heading>" << heading << "</heading>" << endl;
+					kmlFile << "\t\t\t<tilt>0</tilt>" << endl;
+					kmlFile << "\t\t\t<roll>0</roll>" << endl;
+				kmlFile << "\t\t</Orientation>" << endl;
+				kmlFile << "\t\t<Scale>" << endl;
+					kmlFile << "\t\t\t<x>1</x>" << endl;
+					kmlFile << "\t\t\t<y>1</y>" << endl;
+					kmlFile << "\t\t\t<z>1</z>" << endl;
+				kmlFile << "\t\t</Scale>" << endl;
+				kmlFile << "\t\t<Link>" << endl;
+					kmlFile << "\t\t\t<href>files/" << b.getCluster() << ".dae</href>" << endl;
+				kmlFile << "\t\t</Link>" << endl;
+			kmlFile << "\t</Model>" << endl;
+		kmlFile << "</Placemark>" << endl;
+	}
+
+	// End kml file
+	kmlFile << "</Document>" << endl;
+	kmlFile << "</kml>" << endl;
+
+
+	// Create a python script for blender to convert .obj to .dae
+	fs::path pyPath = kmzDir / "obj2dae.py";
+	ofstream pyFile(pyPath);
+
+	pyFile << "# run this script in the same directory" << endl;
+	pyFile << "#    >>> os.chdir(\"path/to/script/dir\")" << endl;
+	pyFile << "#    >>> exec(compile(open(" << pyPath.filename() << ").read(), "
+		<< pyPath.filename() << ", \"exec\"))" << endl;
+	pyFile << endl;
+	pyFile << "import bpy" << endl;
+	pyFile << endl;
+	pyFile << "# delete any existing objects" << endl;
+	pyFile << "bpy.ops.object.select_all()" << endl;
+	pyFile << "bpy.ops.object.delete()" << endl;
+	pyFile << endl;
+
+	// Convert each building
+	for (auto& b : bldgs) {
+		// Construct path to obj file, relative to KMZ path
+		fs::path objPath;
+		for (auto p : kmzDir) objPath /= "..";
+		objPath /= opts.outputDir / opts.region / opts.model / b.getCluster() /
+			(b.getCluster() + "_synth_geometry.obj");
+
+		// Get path to output DAE file
+		fs::path daePath = fs::path("files") / (b.getCluster() + ".dae");
+
+		// Load the .obj
+		pyFile << "bpy.ops.import_scene.obj(filepath=" << objPath
+			<< ", axis_forward='-X', axis_up='Z')" << endl;
+		// Export the .dae
+		pyFile << "bpy.ops.wm.collada_export(filepath=" << daePath << ")" << endl;
+		// Delete the object
+		pyFile << "bpy.ops.object.delete()" << endl;
+		pyFile << endl;
+	}
+}
+

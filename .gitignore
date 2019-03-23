@@ -2,6 +2,7 @@ build/
 debug/
 data/
 output/
+kmz/
 fig/
 facadeSynth
 *.o

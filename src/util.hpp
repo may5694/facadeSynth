@@ -17,6 +17,8 @@ public:
 	glm::vec3 px2utm(glm::vec3 p, Satellite& sat, cv::Rect satBB = {});
 	glm::vec3 utm2uv(glm::vec3 p, Satellite& sat, cv::Rect satBB = {});
 	glm::vec3 uv2utm(glm::vec3 p, Satellite& sat, cv::Rect satBB = {});
+	glm::vec3 utm2ll(glm::vec3 p);
+	glm::vec3 ll2utm(glm::vec3 p);
 	static glm::vec3 px2uv(glm::vec3 p, cv::Rect satBB);
 	static glm::vec3 uv2px(glm::vec3 p, cv::Rect satBB);
 	static glm::vec2 px2uv(glm::vec2 p, cv::Rect satBB);
@@ -27,8 +29,8 @@ private:
 	int epsgCode;
 	glm::vec3 origin;
 	OGRSpatialReference srUTM, *srLL;
-	OGRCoordinateTransformation* utm2ll;
-	OGRCoordinateTransformation* ll2utm;
+	OGRCoordinateTransformation* _utm2ll;
+	OGRCoordinateTransformation* _ll2utm;
 };
 
 // A group of co-planar faces
